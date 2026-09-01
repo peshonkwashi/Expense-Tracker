@@ -3,9 +3,11 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config  # noqa: E402
 from services import ingestion  # noqa: E402
 from tests.helpers import temp_database, write_csv  # noqa: E402
 
@@ -58,11 +60,12 @@ class ImportTests(unittest.TestCase):
     def tearDown(self):
         self.context.__exit__(None, None, None)
 
-    def _import(self, rows, headers=('Date', 'Description', 'Amount', 'Type')):
+    def _import(self, rows, headers=('Date', 'Description', 'Amount', 'Type'),
+                today=None):
         path = write_csv(headers, rows)
         try:
             return ingestion.import_statement(self.conn, self.user_id, path,
-                                              salary_amount=10000.0)
+                                              salary_amount=10000.0, today=today)
         finally:
             os.unlink(path)
 
@@ -173,6 +176,77 @@ class ImportTests(unittest.TestCase):
         stored = self.conn.execute(
             'SELECT description FROM Transaction_Record').fetchone()['description']
         self.assertEqual(stored, payload)
+
+
+class DateRangeTests(unittest.TestCase):
+    """FR-01 issue #1: implausible dates must be rejected, not stored."""
+
+    TODAY = date(2026, 6, 15)
+
+    def test_valid_recent_date_passes(self):
+        self.assertIsNone(ingestion.date_out_of_range(date(2026, 5, 1), self.TODAY))
+
+    def test_future_date_is_rejected(self):
+        reason = ingestion.date_out_of_range(date(2062, 1, 5), self.TODAY)
+        self.assertIsNotNone(reason)
+        self.assertIn('future', reason)
+
+    def test_far_past_date_is_rejected(self):
+        reason = ingestion.date_out_of_range(date(1985, 1, 5), self.TODAY)
+        self.assertIsNotNone(reason)
+        self.assertIn('years old', reason)
+
+    def test_today_is_allowed(self):
+        self.assertIsNone(ingestion.date_out_of_range(self.TODAY, self.TODAY))
+
+    def test_small_future_grace_is_allowed(self):
+        # A pending/value-dated row a day or two ahead is tolerated.
+        within = self.TODAY + timedelta(days=config.FUTURE_DATE_GRACE_DAYS)
+        self.assertIsNone(ingestion.date_out_of_range(within, self.TODAY))
+
+    def test_beyond_grace_is_rejected(self):
+        beyond = self.TODAY + timedelta(days=config.FUTURE_DATE_GRACE_DAYS + 1)
+        self.assertIsNotNone(ingestion.date_out_of_range(beyond, self.TODAY))
+
+    def test_boundary_just_inside_the_age_floor_passes(self):
+        earliest = self.TODAY - timedelta(
+            days=int(365.25 * config.MAX_TRANSACTION_AGE_YEARS) - 1)
+        self.assertIsNone(ingestion.date_out_of_range(earliest, self.TODAY))
+
+
+class DateRangeImportTests(unittest.TestCase):
+    def setUp(self):
+        self.context = temp_database()
+        self.conn, self.user_id = self.context.__enter__()
+
+    def tearDown(self):
+        self.context.__exit__(None, None, None)
+
+    def _import(self, rows, today=None):
+        path = write_csv(('Date', 'Description', 'Amount', 'Type'), rows)
+        try:
+            return ingestion.import_statement(self.conn, self.user_id, path,
+                                              salary_amount=10000.0, today=today)
+        finally:
+            os.unlink(path)
+
+    def test_bad_date_row_is_rejected_but_good_rows_still_import(self):
+        report = self._import([
+            ('2026-05-01', 'Shoprite Manda Hill', '1200.00', 'Debit'),
+            ('2062-01-01', 'Typo Year Row', '300.00', 'Debit'),
+            ('2026-05-03', 'Fuel Puma', '800.00', 'Debit'),
+        ], today=date(2026, 6, 15))
+        self.assertEqual(report['imported'], 2)
+        self.assertEqual(len(report['rejected']), 1)
+        self.assertIn('future', report['rejected'][0][1])
+
+    def test_a_typo_year_does_not_reach_the_database(self):
+        self._import([('2062-01-01', 'Typo Year Row', '300.00', 'Debit')],
+                     today=date(2026, 6, 15))
+        span = self.conn.execute(
+            'SELECT MAX(transaction_date) AS latest FROM Transaction_Record'
+        ).fetchone()['latest']
+        self.assertIsNone(span)  # nothing stored, so no decade-long history
 
 
 if __name__ == '__main__':

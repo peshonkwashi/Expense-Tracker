@@ -13,10 +13,11 @@ aborting the whole upload, and every reason is reported back to the user.
 import hashlib
 import warnings
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
+import config
 import database
 from ml import categorization
 
@@ -97,6 +98,29 @@ def parse_date(value):
     return None if pd.isna(parsed) else parsed.date()
 
 
+def date_out_of_range(date_obj, today=None):
+    """Return a rejection reason if a transaction date is implausible, else None.
+
+    A single row dated 2062 or 1985 — the kind a typo produces — would otherwise
+    be stored and silently corrupt everything downstream, because the forecaster
+    measures month spans and the learning phase counts days from the earliest
+    transaction. A date decades away makes the history look decades long.
+
+    Future dates are allowed a few days' grace for pending or value-dated rows;
+    the past floor is deliberately loose (years, not months) so it only ever
+    catches genuine errors, never legitimately old history.
+    """
+    today = today or date.today()
+    latest = today + timedelta(days=config.FUTURE_DATE_GRACE_DAYS)
+    if date_obj > latest:
+        return f"Date {date_obj.isoformat()} is in the future"
+    earliest = today - timedelta(days=int(365.25 * config.MAX_TRANSACTION_AGE_YEARS))
+    if date_obj < earliest:
+        return (f"Date {date_obj.isoformat()} is more than "
+                f"{config.MAX_TRANSACTION_AGE_YEARS} years old")
+    return None
+
+
 def _row_type(row, columns):
     """Determine (transaction_type, amount) for one row, or (None, reason)."""
     if 'debit' in columns or 'credit' in columns:
@@ -175,13 +199,15 @@ def read_statement(filepath):
     return frame, columns
 
 
-def import_statement(conn, user_id, filepath, salary_amount=None):
+def import_statement(conn, user_id, filepath, salary_amount=None, today=None):
     """Import one statement file.
 
     Returns a report dict with counts and per-row rejection reasons. Raises
-    CsvValidationError when the file itself is unusable.
+    CsvValidationError when the file itself is unusable. `today` is injectable
+    so the date-range validation is deterministic under test.
     """
     frame, columns = read_statement(filepath)
+    today = today or date.today()
 
     report = {'imported': 0, 'duplicates': 0, 'rejected': [], 'rows': len(frame),
               'categorised': Counter(), 'credits': 0, 'salary_rows': 0}
@@ -195,6 +221,10 @@ def import_statement(conn, user_id, filepath, salary_amount=None):
             if date_value is None:
                 report['rejected'].append(
                     (position, f"Unreadable date '{raw.get(columns['date'])}'"))
+                continue
+            date_reason = date_out_of_range(date_value, today)
+            if date_reason:
+                report['rejected'].append((position, date_reason))
                 continue
             date_string = date_value.isoformat()
 

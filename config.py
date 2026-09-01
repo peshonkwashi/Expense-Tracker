@@ -23,6 +23,15 @@ SESSION_TIMEOUT_MINUTES = 10
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {'.csv'}
 
+# --- Ingestion validation (FR-01) -----------------------------------------
+# Sanity bounds on individual rows. A statement with a typo'd year or a
+# reference number that landed in the amount column must be rejected per-row,
+# not stored: one 2062-dated row stretches the forecast history to decades, and
+# one misparsed phone number dominates every aggregate and chart.
+MAX_TRANSACTION_AGE_YEARS = 15   # older than this is almost certainly a typo
+FUTURE_DATE_GRACE_DAYS = 3       # allow a few days for pending/value-dated rows
+MAX_TRANSACTION_AMOUNT = 100_000_000.0   # 100M ZMW ceiling; above this is bad data
+
 # --- Behavioural Learning Phase (FR-05) -----------------------------------
 # The phase completes once the transaction history spans one full salary cycle.
 LEARNING_PHASE_DAYS = 30
