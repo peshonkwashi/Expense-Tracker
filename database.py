@@ -85,7 +85,12 @@ def _apply_migrations(conn):
 def _ensure_indexes(conn):
     for name, target in _INDEXES:
         conn.execute(f'CREATE INDEX IF NOT EXISTS {name} ON {target}')
-    # Deduplication guarantee for FR-01. Partial index keeps NULL hashes legal.
+    # Deduplication guarantee for FR-01 (see schema.sql). Fresh databases get it
+    # from a UNIQUE(user_id, import_hash) table constraint in schema.sql; this
+    # partial unique index gives the identical guarantee to databases created
+    # before that constraint existed, since SQLite cannot add a table constraint
+    # by ALTER. On a fresh database the two overlap harmlessly. The WHERE clause
+    # keeps NULL hashes legal, matching the table constraint's NULL handling.
     conn.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_txn_import_hash '
         'ON Transaction_Record(user_id, import_hash) WHERE import_hash IS NOT NULL'

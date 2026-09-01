@@ -33,6 +33,12 @@ CREATE TABLE IF NOT EXISTS Transaction_Record (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     user_id INTEGER,
     category_id INTEGER,
+    -- Deduplication guarantee (FR-01): the same statement row cannot be stored
+    -- twice, so re-uploading a statement is safe. import_hash is a content hash
+    -- of the row; SQLite treats NULLs as distinct, so any pre-import rows are
+    -- unaffected. Databases created before this constraint existed get the same
+    -- guarantee from a partial unique index in database.py (_ensure_indexes).
+    UNIQUE(user_id, import_hash),
     FOREIGN KEY(user_id) REFERENCES User(user_id),
     FOREIGN KEY(category_id) REFERENCES Category(category_id)
 );
