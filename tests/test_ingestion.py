@@ -249,5 +249,50 @@ class DateRangeImportTests(unittest.TestCase):
         self.assertIsNone(span)  # nothing stored, so no decade-long history
 
 
+class AmountCeilingTests(unittest.TestCase):
+    """FR-01 issue #2: a misparsed number must not become a real transaction."""
+
+    def setUp(self):
+        self.context = temp_database()
+        self.conn, self.user_id = self.context.__enter__()
+
+    def tearDown(self):
+        self.context.__exit__(None, None, None)
+
+    def _import(self, rows, today=date(2026, 6, 15)):
+        path = write_csv(('Date', 'Description', 'Amount', 'Type'), rows)
+        try:
+            return ingestion.import_statement(self.conn, self.user_id, path,
+                                              salary_amount=10000.0, today=today)
+        finally:
+            os.unlink(path)
+
+    def test_absurd_amount_is_rejected(self):
+        # A phone number that landed in the amount column: ~2.6e11.
+        report = self._import([('2026-05-01', 'Bad Row', '260977123456', 'Debit')])
+        self.assertEqual(report['imported'], 0)
+        self.assertEqual(len(report['rejected']), 1)
+        self.assertIn('exceeds the plausible maximum', report['rejected'][0][1])
+
+    def test_large_but_legitimate_amount_is_kept(self):
+        # A big-but-real transaction (e.g. a house deposit) must still import.
+        report = self._import([('2026-05-01', 'Property Deposit', '250000.00', 'Debit')])
+        self.assertEqual(report['imported'], 1)
+
+    def test_ceiling_boundary(self):
+        just_over = f'{config.MAX_TRANSACTION_AMOUNT + 1:.2f}'
+        report = self._import([('2026-05-01', 'Over Ceiling', just_over, 'Debit')])
+        self.assertEqual(report['imported'], 0)
+
+    def test_bad_amount_does_not_distort_totals(self):
+        self._import([
+            ('2026-05-01', 'Shoprite Manda Hill', '1200.00', 'Debit'),
+            ('2026-05-02', 'Misparsed Reference', '999999999999', 'Debit'),
+        ])
+        total = self.conn.execute(
+            'SELECT SUM(amount) AS t FROM Transaction_Record').fetchone()['t']
+        self.assertEqual(total, 1200.00)
+
+
 if __name__ == '__main__':
     unittest.main()

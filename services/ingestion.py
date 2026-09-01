@@ -240,6 +240,15 @@ def import_statement(conn, user_id, filepath, salary_amount=None, today=None):
             if amount == 0:
                 report['rejected'].append((position, 'Amount is zero'))
                 continue
+            if amount > config.MAX_TRANSACTION_AMOUNT:
+                # A reference or phone number that landed in the amount column
+                # parses as a real value in the hundreds of billions. Left in,
+                # it dominates every total, budget and chart, so reject it.
+                report['rejected'].append(
+                    (position, f'Amount {amount:,.2f} exceeds the plausible '
+                               f'maximum of {config.MAX_TRANSACTION_AMOUNT:,.0f} '
+                               f'{config.CURRENCY}'))
+                continue
 
             key = (date_string, categorization.normalise(description),
                    round(amount, 2), txn_type)
