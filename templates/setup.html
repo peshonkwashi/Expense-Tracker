@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+{% set hide_nav = true %}
+{% block title %}Set up your profile{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Set up your profile</h1>
+    <p class="lede">Two minutes now, and the system does the rest. Your salary
+    amount and pay date anchor everything the system learns about your spending.</p>
+
+    <form method="POST">
+        <div class="field">
+            <label for="full_name">Your name</label>
+            <input type="text" id="full_name" name="full_name" required
+                   value="{{ form.get('full_name', '') }}">
+        </div>
+
+        <div class="field">
+            <label for="salary_amount">Monthly salary ({{ currency }})</label>
+            <input type="number" id="salary_amount" name="salary_amount"
+                   step="0.01" min="0.01" required
+                   value="{{ form.get('salary_amount', '') }}">
+            <p class="hint">Your net pay — what actually lands in your account.</p>
+        </div>
+
+        <div class="field">
+            <label for="salary_day">Day of the month you are paid</label>
+            <input type="number" id="salary_day" name="salary_day" min="1" max="31"
+                   required value="{{ form.get('salary_day', '') }}">
+            <p class="hint">Used to measure your spending from payday rather than
+            from the 1st. If you are paid on the 31st, short months are handled
+            automatically.</p>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--line);margin:1.25rem 0;">
+
+        <div class="field">
+            <label for="password">Create a password</label>
+            <input type="password" id="password" name="password" required
+                   minlength="8" autocomplete="new-password">
+            <p class="hint">At least 8 characters. This unlocks the app on every
+            launch. It cannot be recovered, so choose one you will remember.</p>
+        </div>
+
+        <div class="field">
+            <label for="password_confirm">Confirm password</label>
+            <input type="password" id="password_confirm" name="password_confirm"
+                   required minlength="8" autocomplete="new-password">
+        </div>
+
+        <div class="notice">
+            <strong>How your data is handled</strong>
+            <p style="margin:.5rem 0 0;">Everything you enter — your salary, your
+            transactions, your goals — is stored in a single database file on this
+            computer. Nothing is uploaded, shared, or sent to any server. The
+            machine learning runs locally on your machine. You can export or delete
+            the database file at any time from the Settings screen.</p>
+            <label style="margin-top:.75rem;font-weight:600;">
+                <input type="checkbox" name="accept_notice" value="1"
+                       style="width:auto;margin-right:.4rem;" required>
+                I understand how my data is stored.
+            </label>
+        </div>
+
+        <button type="submit">Create profile</button>
+    </form>
+</div>
+{% endblock %}

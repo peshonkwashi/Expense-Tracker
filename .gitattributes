@@ -1,0 +1,10 @@
+# Normalise line endings: store text as LF in the repo, check out native.
+# Keeps diffs clean when the project is cloned across Windows/macOS/Linux.
+* text=auto eol=lf
+
+# Treat these as binary so Git never munges them.
+*.pdf binary
+*.joblib binary
+*.db binary
+*.png binary
+*.jpg binary

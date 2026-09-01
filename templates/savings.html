@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+{% block title %}Savings Goals{% endblock %}
+{% block content %}
+
+<h1>Savings goals</h1>
+<p class="lede">Name what you are saving for and the system works out what you
+need to put aside each month to get there.</p>
+
+<div class="grid three" style="margin-bottom:1.25rem;">
+    <div class="stat good">
+        <div class="label">Savings pool</div>
+        <div class="value">{{ savings.pool|money }}</div>
+        <div class="sub">income {{ savings.income|money }} − spending {{ savings.expenses|money }}</div>
+    </div>
+    <div class="stat">
+        <div class="label">Recommended monthly saving</div>
+        <div class="value">{{ savings.recommended_monthly|money }}</div>
+        <div class="sub">{% if budget %}from your current budget{% else %}available after the learning phase{% endif %}</div>
+    </div>
+    <div class="stat">
+        <div class="label">Not yet committed</div>
+        <div class="value">{{ savings.unallocated|money }}</div>
+        <div class="sub">pool left after funding your goals</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Add a goal</h2>
+    <form method="POST">
+        <div class="grid three">
+            <div class="field">
+                <label for="goal_name">What are you saving for?</label>
+                <input type="text" id="goal_name" name="goal_name" required
+                       placeholder="Emergency fund">
+            </div>
+            <div class="field">
+                <label for="target_amount">How much ({{ currency }})?</label>
+                <input type="number" step="0.01" min="0.01" id="target_amount"
+                       name="target_amount" required>
+            </div>
+            <div class="field">
+                <label for="target_date">By when?</label>
+                <input type="date" id="target_date" name="target_date" required>
+            </div>
+        </div>
+        <button type="submit">Add goal</button>
+    </form>
+</div>
+
+<h2>Your goals</h2>
+{% if savings.goals %}
+<p class="muted" style="margin-top:-.4rem;">Your savings pool is allocated to
+goals in due-date order — the goal due soonest is funded first.</p>
+
+<div class="grid three">
+    {% for goal in savings.goals %}
+    <div class="card">
+        <div class="split">
+            <h3 style="margin:0;">{{ goal.goal_name }}</h3>
+            {% if goal.overdue %}<span class="badge over">past due</span>
+            {% elif goal.progress >= 100 %}<span class="badge ok">funded</span>
+            {% elif goal.on_track %}<span class="badge ok">on track</span>
+            {% else %}<span class="badge warning">behind</span>{% endif %}
+        </div>
+
+        <div class="bar {% if goal.progress < 40 %}warning{% endif %}" style="margin:.75rem 0 .35rem;">
+            <span style="width: {{ goal.progress }}%"></span>
+        </div>
+        <p class="muted" style="margin:0 0 .75rem;">
+            {{ goal.saved|money }} of {{ goal.target_amount|money }} {{ currency }}
+            — {{ goal.progress }}%
+        </p>
+
+        <table style="font-size:.87rem;">
+            <tr><td>Target date</td><td class="num">{{ goal.target_date }}</td></tr>
+            <tr><td>Months left</td><td class="num">{{ goal.months_remaining }}</td></tr>
+            <tr><td>Still needed</td><td class="num">{{ goal.shortfall|money }}</td></tr>
+            <tr>
+                <td><strong>Save per month</strong></td>
+                <td class="num"><strong>{{ goal.monthly_required|money }}</strong></td>
+            </tr>
+        </table>
+
+        {% if not goal.on_track and goal.monthly_required > 0 and budget %}
+        <p class="muted" style="margin-top:.6rem;">
+            This needs {{ goal.monthly_required|money }} {{ currency }} a month, but
+            your budget only frees up {{ budget.recommended_savings|money }}. Either
+            push the date back or trim a discretionary category.
+        </p>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('delete_goal', goal_id=goal.goal_id) }}"
+              style="margin-top:.75rem;"
+              onsubmit="return confirm('Remove the goal &quot;{{ goal.goal_name }}&quot;?');">
+            <button type="submit" class="secondary small">Remove</button>
+        </form>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card"><p class="empty">No goals yet. Add one above — even a small
+emergency fund changes how the budget treats your surplus.</p></div>
+{% endif %}
+{% endblock %}

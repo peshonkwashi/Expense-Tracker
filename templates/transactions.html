@@ -1,0 +1,143 @@
+{% extends 'base.html' %}
+{% block title %}Transactions{% endblock %}
+{% block content %}
+
+<h1>Transactions</h1>
+<p class="lede">Upload your bank statement and the system reads, categorises and
+deduplicates it for you. Correct anything it gets wrong — it learns from every
+correction.</p>
+
+<div class="card">
+    <h2>Upload a bank statement</h2>
+    <form method="POST" enctype="multipart/form-data" class="split">
+        <div style="flex:1;min-width:260px;">
+            <input type="file" name="file" accept=".csv" required>
+            <p class="hint">CSV only, up to 5MB. Your file needs a date column, a
+            description column and an amount — either a single Amount column with a
+            Debit/Credit type, or separate Debit and Credit columns. Uploading the
+            same statement twice is safe; duplicates are skipped.</p>
+        </div>
+        <button type="submit">Upload and categorise</button>
+    </form>
+</div>
+
+{% if metric %}
+<div class="card">
+    <div class="split">
+        <div>
+            <h3 style="margin:0;">Categorisation model</h3>
+            <p class="muted" style="margin:.2rem 0 0;">
+                {{ metric['algorithm'] }} trained on {{ metric['sample_count'] }}
+                labelled transactions.
+                {% if metric['f1_score'] is not none %}
+                    Macro F1 {{ '%.3f'|format(metric['f1_score']) }}
+                    {% if metric['f1_score'] >= target_f1 %}
+                        <span class="badge ok">meets the {{ target_f1 }} target</span>
+                    {% else %}
+                        <span class="badge warning">below the {{ target_f1 }} target</span>
+                    {% endif %}
+                {% endif %}
+            </p>
+            <p class="muted" style="margin:.2rem 0 0;">{{ metric['notes'] }}</p>
+        </div>
+        <a class="button secondary small" href="{{ url_for('settings') }}">Model settings</a>
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <form method="GET" class="split no-print" style="margin-bottom:1rem;">
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;">
+            <div>
+                <label for="category">Category</label>
+                <select id="category" name="category" class="small">
+                    <option value="">All categories</option>
+                    {% for category in categories %}
+                    <option value="{{ category['category_name'] }}"
+                        {% if category['category_name'] == selected_category %}selected{% endif %}>
+                        {{ category['category_name'] }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="month">Month</label>
+                <select id="month" name="month" class="small">
+                    <option value="">All months</option>
+                    {% for month in months %}
+                    <option value="{{ month }}" {% if month == selected_month %}selected{% endif %}>{{ month }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="secondary small">Filter</button>
+            {% if selected_category or selected_month %}
+            <a class="button secondary small" href="{{ url_for('transactions') }}">Clear</a>
+            {% endif %}
+        </div>
+        <span class="muted">{{ transactions|length }} shown</span>
+    </form>
+
+    {% if transactions %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Description</th>
+                    <th class="num">Amount</th>
+                    <th>Type</th>
+                    <th>Category</th>
+                    <th>Assigned by</th>
+                    <th class="no-print">Correct it</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for txn in transactions %}
+                <tr>
+                    <td>{{ txn['transaction_date'] }}</td>
+                    <td>
+                        {{ txn['description'] }}
+                        {% if txn['is_subscription'] %}<span class="badge sub" title="Recurring charge">recurring</span>{% endif %}
+                        {% if txn['is_salary'] %}<span class="badge essential">salary</span>{% endif %}
+                    </td>
+                    <td class="num">{{ txn['amount']|money }}</td>
+                    <td>{{ txn['transaction_type']|capitalize }}</td>
+                    <td>
+                        <span class="badge {{ 'essential' if txn['category_type'] == 'ESSENTIAL' else 'discretionary' }}">
+                            {{ txn['category_name'] or 'Uncategorised' }}
+                        </span>
+                    </td>
+                    <td>
+                        <span class="muted">
+                        {% if txn['category_source'] == 'user' %}you
+                        {% elif txn['category_source'] == 'model' %}model{% if txn['category_confidence'] %} ({{ (txn['category_confidence'] * 100)|round(0)|int }}%){% endif %}
+                        {% elif txn['category_source'] == 'rule' %}keyword rule
+                        {% else %}—{% endif %}
+                        </span>
+                    </td>
+                    <td class="no-print">
+                        {% if txn['transaction_type'] == 'DEBIT' %}
+                        <form class="inline-form" method="POST"
+                              action="{{ url_for('recategorise', transaction_id=txn['transaction_id']) }}">
+                            <select name="category_name" class="small">
+                                {% for category in categories %}
+                                <option value="{{ category['category_name'] }}"
+                                    {% if category['category_name'] == txn['category_name'] %}selected{% endif %}>
+                                    {{ category['category_name'] }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="secondary small">Save</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+        <p class="empty">No transactions yet. Upload a statement above to get started.</p>
+    {% endif %}
+</div>
+{% endblock %}

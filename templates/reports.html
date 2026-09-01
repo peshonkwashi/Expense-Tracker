@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% block title %}Monthly report{% endblock %}
+{% block content %}
+
+<div class="split">
+    <div>
+        <h1>Monthly report</h1>
+        <p class="lede">What came in, what went out, and how it compared to the
+        budget the system recommended.</p>
+    </div>
+    {% if report %}<button class="secondary no-print" onclick="window.print()">Print this report</button>{% endif %}
+</div>
+
+{% if months %}
+<form method="GET" class="card no-print" style="display:flex;gap:.6rem;align-items:flex-end;">
+    <div>
+        <label for="month">Month</label>
+        <select id="month" name="month" class="small">
+            {% for month in months %}
+            <option value="{{ month }}" {% if month == selected %}selected{% endif %}>{{ month }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <button type="submit" class="secondary small">View</button>
+</form>
+{% endif %}
+
+{% if report %}
+<div class="grid three" style="margin-bottom:1.25rem;">
+    <div class="stat good">
+        <div class="label">Money in</div>
+        <div class="value">{{ report.income|money }}</div>
+    </div>
+    <div class="stat">
+        <div class="label">Money out</div>
+        <div class="value">{{ report.expenditure|money }}</div>
+    </div>
+    <div class="stat {% if report.net >= 0 %}good{% else %}bad{% endif %}">
+        <div class="label">Saved</div>
+        <div class="value">{{ report.net|money }}</div>
+        <div class="sub">{% if report.net >= 0 %}surplus{% else %}shortfall{% endif %} for {{ report.month }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Spending by category, {{ report.month }}</h2>
+    {% if not report.has_budget %}
+    <p class="muted">No budget was recorded for this month, so only actual
+    spending is shown. Budgets are stored from the month the learning phase
+    completes onwards.</p>
+    {% endif %}
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Category</th>
+                    <th>Type</th>
+                    <th class="num">Actual</th>
+                    <th class="num">Budgeted</th>
+                    <th class="num">Variance</th>
+                    <th>Result</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for line in report.lines %}
+                <tr>
+                    <td>{{ line.category }}</td>
+                    <td>{% if line.type %}<span class="badge {{ line.type|lower }}">{{ line.type|capitalize }}</span>{% endif %}</td>
+                    <td class="num">{{ line.actual|money }}</td>
+                    <td class="num">{% if line.recommended is not none %}{{ line.recommended|money }}{% else %}—{% endif %}</td>
+                    <td class="num">{% if line.variance is not none %}{{ line.variance|money }}{% else %}—{% endif %}</td>
+                    <td>
+                        {% if line.status == 'over' %}<span class="badge over">over by {{ (0 - line.variance)|money }}</span>
+                        {% elif line.status == 'under' %}<span class="badge ok">under by {{ line.variance|money }}</span>
+                        {% else %}<span class="badge">no budget set</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <th colspan="2">Total</th>
+                    <th class="num">{{ report.expenditure|money }}</th>
+                    <th></th><th></th><th></th>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card"><p class="empty">No transactions recorded yet. Upload a bank
+statement from the <a href="{{ url_for('transactions') }}">Transactions</a>
+screen.</p></div>
+{% endif %}
+{% endblock %}

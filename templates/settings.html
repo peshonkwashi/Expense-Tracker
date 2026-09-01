@@ -1,0 +1,98 @@
+{% extends 'base.html' %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+<h1>Settings</h1>
+<p class="lede">Model performance, data handling, and your backup.</p>
+
+<div class="grid two">
+    <div class="card">
+        <h2>Categorisation model</h2>
+        {% if categorisation %}
+            <table style="font-size:.9rem;">
+                <tr><td>Algorithm chosen</td><td class="num">{{ categorisation['algorithm'] }}</td></tr>
+                <tr><td>Macro F1 (5-fold CV)</td>
+                    <td class="num">
+                        {% if categorisation['f1_score'] is not none %}
+                            {{ '%.3f'|format(categorisation['f1_score']) }}
+                            {% if categorisation['f1_score'] >= target_f1 %}
+                                <span class="badge ok">meets {{ target_f1 }}</span>
+                            {% else %}
+                                <span class="badge warning">below {{ target_f1 }}</span>
+                            {% endif %}
+                        {% else %}not evaluated{% endif %}
+                    </td></tr>
+                <tr><td>Training examples</td><td class="num">{{ categorisation['sample_count'] }}</td></tr>
+                <tr><td>Last trained</td><td class="num">{{ categorisation['trained_at'] }}</td></tr>
+            </table>
+            <p class="muted" style="margin-top:.6rem;">{{ categorisation['notes'] }}</p>
+        {% else %}
+            <p class="empty">Not trained yet. Keyword rules are labelling
+            transactions until there is enough data.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Forecasting model</h2>
+        {% if forecasting_metric %}
+            <table style="font-size:.9rem;">
+                <tr><td>Method</td><td class="num">{{ forecasting_metric['algorithm'] }}</td></tr>
+                <tr><td>Mean absolute error</td><td class="num">{{ forecasting_metric['mae']|money }} {{ currency }}</td></tr>
+                <tr><td>Error as % of actual</td>
+                    <td class="num">
+                        {% if forecasting_metric['mae_ratio'] is not none %}
+                            {{ (forecasting_metric['mae_ratio'] * 100)|round(1) }}%
+                            {% if forecasting_metric['mae_ratio'] <= max_mae_ratio %}
+                                <span class="badge ok">within {{ (max_mae_ratio * 100)|int }}%</span>
+                            {% else %}
+                                <span class="badge warning">above {{ (max_mae_ratio * 100)|int }}%</span>
+                            {% endif %}
+                        {% else %}—{% endif %}
+                    </td></tr>
+                <tr><td>Months of history</td><td class="num">{{ forecasting_metric['sample_count'] }}</td></tr>
+                <tr><td>Last evaluated</td><td class="num">{{ forecasting_metric['trained_at'] }}</td></tr>
+            </table>
+            <p class="muted" style="margin-top:.6rem;">{{ forecasting_metric['notes'] }}</p>
+        {% else %}
+            <p class="empty">Not evaluated yet. Three or more complete months of
+            history are needed for a hold-out test.</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <h2>Retrain and re-evaluate</h2>
+    <p class="muted">Retrains the categoriser on everything labelled so far
+    (including your corrections), re-applies it to anything still uncategorised,
+    re-runs the forecast hold-out test and refreshes subscription detection.</p>
+    <form method="POST" action="{{ url_for('retrain') }}">
+        <button type="submit">Retrain models now</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Your data</h2>
+    <p>All of your data lives in one file on this computer:</p>
+    <p class="muted" style="word-break:break-all;"><code>{{ db_path }}</code></p>
+    <ul class="muted">
+        <li>Nothing is transmitted to any server. The app listens on this machine
+        only (127.0.0.1).</li>
+        <li>Your password is stored as a salted PBKDF2 hash, never as plain text.</li>
+        <li>You are signed out automatically after {{ session_timeout }} minutes
+        of inactivity.</li>
+        <li>Every database query is parameterised, so a merchant name in a
+        statement cannot alter a query.</li>
+    </ul>
+    <a class="button" href="{{ url_for('export_database') }}">Download a backup</a>
+</div>
+
+<div class="card">
+    <h2>Profile</h2>
+    <table style="font-size:.9rem;">
+        <tr><td>Name</td><td class="num">{{ user['full_name'] }}</td></tr>
+        <tr><td>Monthly salary</td><td class="num">{{ user['salary_amount']|money }} {{ currency }}</td></tr>
+        <tr><td>Pay day</td><td class="num">Day {{ user['salary_day'] }}</td></tr>
+        <tr><td>Profile created</td><td class="num">{{ user['created_at'] }}</td></tr>
+    </table>
+</div>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% set hide_nav = true %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Welcome back</h1>
+    <p class="lede">Enter your password to unlock your financial data. Everything
+    stays on this device.</p>
+
+    <form method="POST">
+        <div class="field">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autofocus
+                   autocomplete="current-password">
+        </div>
+        <button type="submit">Unlock</button>
+    </form>
+
+    <p class="muted" style="margin-top:1rem;">
+        You are signed out automatically after {{ session_timeout }} minutes of inactivity.
+    </p>
+</div>
+{% endblock %}

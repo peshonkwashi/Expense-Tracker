@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Salary-Linked Expense Tracker{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- Chart.js renders the dashboard visuals. charts.js falls back to CSS bars
+         when this cannot load, so the dashboard still works fully offline. -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+    <script src="{{ url_for('static', filename='js/charts.js') }}" defer></script>
+</head>
+<body data-currency="{{ currency }}">
+{% if not hide_nav %}
+<header class="topbar">
+    <span class="brand">Salary-Linked Expense Tracker</span>
+    <nav>
+        <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+        <a href="{{ url_for('transactions') }}" {% if request.endpoint == 'transactions' %}class="active"{% endif %}>Transactions</a>
+        <a href="{{ url_for('budget') }}" {% if request.endpoint == 'budget' %}class="active"{% endif %}>Budget</a>
+        <a href="{{ url_for('savings') }}" {% if request.endpoint == 'savings' %}class="active"{% endif %}>Savings Goals</a>
+        <a href="{{ url_for('reports') }}" {% if request.endpoint == 'reports' %}class="active"{% endif %}>Reports</a>
+        <a href="{{ url_for('settings') }}" {% if request.endpoint == 'settings' %}class="active"{% endif %}>Settings</a>
+        <a href="{{ url_for('logout') }}">Sign out</a>
+    </nav>
+</header>
+{% endif %}
+
+<div class="{% if hide_nav %}auth-shell{% else %}container{% endif %}">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flashes">
+        {% for category, message in messages %}
+          <li class="{{ category }}">{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+</div>
+</body>
+</html>

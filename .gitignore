@@ -1,0 +1,32 @@
+# --- Local data: never commit financial records, backups, or the session key ---
+# The SQLite database holds the user's real financial data and stays local
+# (NFR-05). Everything derived from it is regenerable and also excluded.
+expense_tracker.db
+expense_tracker.db-wal
+expense_tracker.db-shm
+expense_tracker.db.*
+*.bak
+.flask_secret
+
+# Uploaded statements and generated artefacts (all reproducible)
+uploads/
+ml/models/
+sample_data/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+env/
+
+# --- Editor / OS noise ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Proposal / report documents — keep out of the public repo
+*.pdf

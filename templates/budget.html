@@ -1,0 +1,161 @@
+{% extends 'base.html' %}
+{% block title %}Budget{% endblock %}
+{% block content %}
+
+<h1>Your budget for {{ budget.month if budget else now.strftime('%Y-%m') }}</h1>
+<p class="lede">Built from your own spending history, not a generic rule. Every
+figure below can be traced back to the data it came from.</p>
+
+{% if not learning.complete %}
+<div class="notice">
+    <strong>Not ready yet</strong>
+    <p style="margin:.4rem 0 .6rem;">{{ learning.message }}</p>
+    <div class="bar"><span style="width: {{ learning.progress }}%"></span></div>
+    <p class="muted" style="margin:.5rem 0 0;">The system observes for one full
+    salary cycle before recommending anything. A budget built on a fortnight of
+    data would just be a guess wearing a chart.</p>
+</div>
+
+{% else %}
+
+<div class="grid four" style="margin-bottom:1.25rem;">
+    <div class="stat">
+        <div class="label">Salary</div>
+        <div class="value">{{ budget.salary|money }}</div>
+    </div>
+    <div class="stat">
+        <div class="label">Essentials</div>
+        <div class="value">{{ budget.essential_total|money }}</div>
+        <div class="sub">{{ (budget.essential_total / budget.salary * 100)|round(0)|int }}% of salary</div>
+    </div>
+    <div class="stat {% if budget.overcommitted %}warn{% endif %}">
+        <div class="label">Discretionary</div>
+        <div class="value">{{ budget.discretionary_total|money }}</div>
+        <div class="sub">
+            {% if budget.overcommitted %}trimmed to {{ (budget.scale * 100)|round(0)|int }}% of forecast
+            {% else %}{{ (budget.discretionary_total / budget.salary * 100)|round(0)|int }}% of salary{% endif %}
+        </div>
+    </div>
+    <div class="stat good">
+        <div class="label">Recommended savings</div>
+        <div class="value">{{ budget.recommended_savings|money }}</div>
+        <div class="sub">{{ budget.savings_rate }}% of salary</div>
+    </div>
+</div>
+
+{% if budget.overcommitted %}
+<div class="alert critical">
+    <strong>Your forecast spending does not fit your salary.</strong>
+    Essentials ({{ budget.essential_total|money }}) plus your savings commitments
+    ({{ budget.goal_total|money }}) leave less than you normally spend on
+    discretionary categories. Each one below has been scaled to
+    {{ (budget.scale * 100)|round(0)|int }}% of forecast. Cutting proportionally
+    across wants protects the needs you cannot cut.
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Category allocations</h2>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Category</th>
+                    <th>Type</th>
+                    <th class="num">Forecast</th>
+                    <th class="num">Recommended</th>
+                    <th class="num">% of salary</th>
+                    <th class="num">Spent so far</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in budget.rows %}
+                <tr>
+                    <td>
+                        <strong>{{ row.category }}</strong>
+                        <details class="explain">
+                            <summary>How was this worked out?</summary>
+                            <p>{{ row.explanation }}</p>
+                            <p>Monthly history: {% for month in row.months %}{{ month }}
+                            = {{ row.history[loop.index0]|money }}{% if not loop.last %}; {% endif %}{% endfor %}</p>
+                        </details>
+                    </td>
+                    <td><span class="badge {{ row.type|lower }}">{{ row.type|capitalize }}</span></td>
+                    <td class="num">{{ row.forecast|money }}</td>
+                    <td class="num"><strong>{{ row.recommended|money }}</strong></td>
+                    <td class="num">{{ row.pct_of_salary }}%</td>
+                    <td class="num">{{ row.spent|money }}</td>
+                    <td>
+                        <span class="badge {{ row.status }}">
+                            {% if row.status == 'over' %}over budget
+                            {% elif row.status == 'warning' %}{{ row.used_pct|round(0)|int }}% used
+                            {% else %}on track{% endif %}
+                        </span>
+                        <div class="bar {{ row.status if row.status != 'ok' else '' }}">
+                            <span style="width: {{ [row.used_pct, 100]|min }}%"></span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <th colspan="3">Total allocated</th>
+                    <th class="num">{{ budget.allocated_total|money }}</th>
+                    <th class="num">{{ (budget.allocated_total / budget.salary * 100)|round(0)|int }}%</th>
+                    <th class="num">{{ budget.spent_total|money }}</th>
+                    <th></th>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+
+<div class="grid two">
+    <div class="card">
+        <h2>How this budget was built</h2>
+        <ol class="muted" style="padding-left:1.1rem;margin:0;">
+            <li><strong>Essentials first.</strong> Each essential category is
+            funded at its forecast plus a 5% buffer
+            ({{ budget.essential_total|money }} {{ currency }} in total).</li>
+            <li><strong>Savings commitments next.</strong> Your goals require
+            {{ budget.goal_total|money }} {{ currency }} a month to land on time.</li>
+            <li><strong>Discretionary spending last.</strong> What remains
+            ({{ budget.discretionary_total|money }} {{ currency }}) is shared
+            across your wants.</li>
+            <li><strong>Anything left over is savings.</strong> That comes to
+            {{ budget.recommended_savings|money }} {{ currency }} this month.</li>
+        </ol>
+        <p class="muted" style="margin-top:.75rem;">This follows the needs-based
+        allocation hierarchy rather than a fixed 50/30/20 split, so it adapts to
+        what your life actually costs.</p>
+    </div>
+
+    <div class="card">
+        <h2>Forecast accuracy</h2>
+        {% if metric %}
+            <p>Last hold-out evaluation: mean absolute error of
+            <strong>{{ metric['mae']|money }} {{ currency }}</strong> per category
+            {% if metric['mae_ratio'] is not none %}
+                ({{ (metric['mae_ratio'] * 100)|round(1) }}% of average actual spend
+                {% if metric['mae_ratio'] <= max_mae_ratio %}
+                    <span class="badge ok">within the {{ (max_mae_ratio * 100)|int }}% target</span>
+                {% else %}
+                    <span class="badge warning">above the {{ (max_mae_ratio * 100)|int }}% target</span>
+                {% endif %})
+            {% endif %}
+            </p>
+            <p class="muted">{{ metric['notes'] }}</p>
+            <p class="muted">Measured by training on every month except the most
+            recent, then predicting that month and comparing against what actually
+            happened.</p>
+        {% else %}
+            <p class="empty">No accuracy evaluation yet. Run one from
+            <a href="{{ url_for('settings') }}">Settings</a> once you have three or
+            more complete months of history.</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,178 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+
+<div class="split">
+    <div>
+        <h1>Hello, {{ user['full_name'].split()[0] }}</h1>
+        <p class="lede">Salary {{ user['salary_amount']|money }} {{ currency }},
+        paid on day {{ user['salary_day'] }} of each month.</p>
+    </div>
+</div>
+
+{% if not learning.complete %}
+<div class="notice">
+    <strong>Behavioural learning phase in progress</strong>
+    <p style="margin:.4rem 0 .6rem;">{{ learning.message }}</p>
+    <div class="bar"><span style="width: {{ learning.progress }}%"></span></div>
+    <p class="muted" style="margin:.4rem 0 0;">
+        {{ learning.progress }}% complete —
+        {{ learning.days_observed }}/{{ learning.days_required }} days,
+        {{ learning.transactions }}/{{ learning.transactions_required }} transactions.
+        The system is deliberately holding back budget recommendations until it has
+        seen a full salary cycle, so your first budget reflects how you actually
+        spend rather than a guess.
+    </p>
+</div>
+{% endif %}
+
+{% if budget %}
+<div class="grid four" style="margin-bottom:1.25rem;">
+    <div class="stat">
+        <div class="label">Salary</div>
+        <div class="value">{{ budget.salary|money }}</div>
+        <div class="sub">{{ currency }} per month</div>
+    </div>
+    <div class="stat {% if budget.overcommitted %}bad{% endif %}">
+        <div class="label">Projected spending</div>
+        <div class="value">{{ budget.allocated_total|money }}</div>
+        <div class="sub">{{ (budget.allocated_total / budget.salary * 100)|round(0)|int }}% of salary</div>
+    </div>
+    <div class="stat">
+        <div class="label">Spent this month</div>
+        <div class="value">{{ budget.spent_total|money }}</div>
+        <div class="sub">{{ budget.month }}</div>
+    </div>
+    <div class="stat good">
+        <div class="label">Recommended savings</div>
+        <div class="value">{{ budget.recommended_savings|money }}</div>
+        <div class="sub">{{ budget.savings_rate }}% of salary</div>
+    </div>
+</div>
+{% endif %}
+
+<div class="grid two">
+    <div class="card">
+        <h2>Budget vs actual</h2>
+        {% if budget %}
+            <div class="chart-box"><canvas id="budgetChart"></canvas></div>
+            <script type="application/json" id="budget-chart-data">{{ chart|tojson }}</script>
+        {% else %}
+            <p class="empty">Your budget chart appears once the learning phase
+            completes.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Alerts</h2>
+        {% if nudges %}
+            {% for nudge in nudges %}
+            <div class="nudge {{ nudge.severity }}">
+                <div class="title">{{ nudge.title }}</div>
+                <div>{{ nudge.message }}</div>
+                <details class="explain">
+                    <summary>Why am I seeing this?</summary>
+                    <p>{{ nudge.why }}</p>
+                </details>
+            </div>
+            {% endfor %}
+        {% elif budget %}
+            <div class="alert success">You are on track. No category has passed
+            {{ nudge_threshold }}% of its recommended allocation this month.</div>
+        {% else %}
+            <p class="empty">Alerts start once the system knows what normal looks
+            like for you.</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="grid two">
+    <div class="card">
+        <h2>Where your money goes after payday</h2>
+        <p class="muted">
+            A <strong>typical</strong> pay cycle, counted from day
+            {{ user['salary_day'] }}
+            {%- if cycle.partial_only %}, based only on the cycle currently in
+            progress{% elif cycle.cycles > 1 %}, averaged over
+            {{ cycle.cycles }} completed cycles{% endif %}.
+            Weeks add up to {{ cycle.total|money }} {{ currency }} against a
+            salary of {{ user['salary_amount']|money }}.
+        </p>
+        {% if cycle.total %}
+            <div class="chart-box" style="height:220px;"><canvas id="cycleChart"></canvas></div>
+            <script type="application/json" id="cycle-chart-data">{{ cycle_chart|tojson }}</script>
+            {% if cycle.has_surge %}
+            <div class="alert warning" style="margin-top:.75rem;">
+                {{ cycle.surge_share }}% of your spending happens in the first week
+                after payday. This is the post-salary surge pattern — the money
+                feels available, so it goes.
+            </div>
+            {% else %}
+            <p class="muted" style="margin-top:.5rem;">Your spending is spread
+            fairly evenly across the cycle ({{ cycle.surge_share }}% in week 1).</p>
+            {% endif %}
+        {% else %}
+            <p class="empty">No spending recorded yet.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Savings progress</h2>
+        {% if savings.goals %}
+            {% for goal in savings.goals %}
+            <div style="margin-bottom:1rem;">
+                <div class="split" style="margin-bottom:.15rem;">
+                    <strong>{{ goal.goal_name }}</strong>
+                    <span class="muted">{{ goal.saved|money }} / {{ goal.target_amount|money }} {{ currency }}</span>
+                </div>
+                <div class="bar {% if goal.progress < 40 %}warning{% endif %}">
+                    <span style="width: {{ goal.progress }}%"></span>
+                </div>
+                <span class="muted">{{ goal.progress }}% — due {{ goal.target_date }}</span>
+            </div>
+            {% endfor %}
+            {% if savings.unallocated %}
+            <p class="muted">{{ savings.unallocated|money }} {{ currency }} of your
+            savings pool is not yet committed to any goal.</p>
+            {% endif %}
+        {% else %}
+            <p class="empty">No savings goals yet.
+            <a href="{{ url_for('savings') }}">Set one up</a> and the system will
+            work out what you need to put aside each month.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if subscriptions.count %}
+<div class="card">
+    <h2>Recurring charges</h2>
+    <p class="muted">{{ subscriptions.count }} recurring charge(s) totalling
+    <strong>{{ subscriptions.monthly_total|money }} {{ currency }}</strong> a month
+    ({{ subscriptions.annual_total|money }} a year).</p>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Charge</th>
+                    <th class="num">Monthly</th>
+                    <th class="num">Times seen</th>
+                    <th>Last charged</th>
+                    <th class="num">Yearly cost</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in subscriptions.entries %}
+                <tr>
+                    <td>{{ item.label }}</td>
+                    <td class="num">{{ item.monthly_amount|money }}</td>
+                    <td class="num">{{ item.occurrences }}</td>
+                    <td>{{ item.last_seen }}</td>
+                    <td class="num">{{ item.annualised|money }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
