@@ -199,7 +199,67 @@ def read_statement(filepath):
     return frame, columns
 
 
-def import_statement(conn, user_id, filepath, salary_amount=None, today=None):
+def _day_of_month_distance(day, pay_day):
+    """Days between two days-of-month, wrapping around the month end.
+
+    Uses 31 as the cycle length so that the 1st reads as close to the 30th
+    (a salary paid at month end lands on the 1st when that falls on a weekend).
+    """
+    raw = abs(day - pay_day)
+    return min(raw, 31 - raw)
+
+
+def detect_salary(conn, user_id):
+    """Flag the salary credit for each calendar month (FR-04).
+
+    Replaces the original 'flag every credit within 10% of salary' rule, which
+    mislabelled refunds, bonuses and double-payment months. A credit qualifies
+    only if it is close to the declared salary in both amount and timing, and at
+    most one is chosen per calendar month — the one nearest the pay day, then
+    nearest the declared amount. Runs over the user's whole credit history, so
+    it stays correct when statements overlap or are re-uploaded.
+
+    Returns the transaction ids flagged as salary.
+    """
+    user = database.get_user(conn)
+    if not user or not user['salary_amount'] or not user['salary_day']:
+        return []
+    salary_amount = float(user['salary_amount'])
+    pay_day = int(user['salary_day'])
+    tolerance = salary_amount * config.SALARY_MATCH_TOLERANCE
+
+    conn.execute(
+        "UPDATE Transaction_Record SET is_salary = 0 "
+        "WHERE user_id = ? AND transaction_type = 'CREDIT'", (user_id,))
+
+    candidates = conn.execute(
+        "SELECT transaction_id, transaction_date, amount FROM Transaction_Record "
+        "WHERE user_id = ? AND transaction_type = 'CREDIT' "
+        "AND ABS(amount - ?) <= ? ORDER BY transaction_date",
+        (user_id, salary_amount, tolerance)).fetchall()
+
+    by_month = {}
+    for row in candidates:
+        iso = str(row['transaction_date'])
+        day = int(iso[8:10])
+        day_distance = _day_of_month_distance(day, pay_day)
+        if day_distance > config.SALARY_DAY_WINDOW_DAYS:
+            continue  # right size, wrong time — a refund or bonus, not salary
+        month = iso[:7]
+        by_month.setdefault(month, []).append(
+            (day_distance, abs(float(row['amount']) - salary_amount),
+             row['transaction_id']))
+
+    chosen = [min(rows)[2] for rows in by_month.values()]
+    if chosen:
+        placeholders = ','.join('?' * len(chosen))
+        conn.execute(
+            f'UPDATE Transaction_Record SET is_salary = 1 '
+            f'WHERE transaction_id IN ({placeholders})', chosen)
+    return chosen
+
+
+def import_statement(conn, user_id, filepath, today=None):
     """Import one statement file.
 
     Returns a report dict with counts and per-row rejection reasons. Raises
@@ -256,14 +316,12 @@ def import_statement(conn, user_id, filepath, salary_amount=None, today=None):
             digest = _import_hash(user_id, date_string, description, amount,
                                   txn_type, occurrences[key])
 
-            is_salary = 0
             if txn_type == 'CREDIT':
                 report['credits'] += 1
-                # A credit within 10% of the declared salary is the salary
-                # deposit that anchors the cycle analysis (FR-04).
-                if salary_amount and abs(amount - salary_amount) <= salary_amount * 0.10:
-                    is_salary = 1
-                    report['salary_rows'] += 1
+                # Salary is not decided here. Which credit is the salary depends
+                # on the whole month's credits (one per month, nearest the pay
+                # day), so it is resolved by detect_salary() after every row is
+                # in. Store as non-salary for now.
                 category_name, confidence, source = 'Uncategorised', None, 'default'
             else:
                 category_name, confidence, source = categorization.classify(description)
@@ -274,8 +332,8 @@ def import_statement(conn, user_id, filepath, salary_amount=None, today=None):
                 '(transaction_date, description, amount, transaction_type, '
                 ' is_salary, category_source, category_confidence, import_hash, '
                 ' user_id, category_id) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (date_string, description, round(amount, 2), txn_type, is_salary,
+                'VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)',
+                (date_string, description, round(amount, 2), txn_type,
                  source, confidence, digest, user_id,
                  database.category_id_for(conn, category_name)))
 
@@ -283,6 +341,8 @@ def import_statement(conn, user_id, filepath, salary_amount=None, today=None):
                 report['duplicates'] += 1
             else:
                 report['imported'] += 1
+
+        report['salary_rows'] = len(detect_salary(conn, user_id))
         conn.commit()
     except Exception:
         conn.rollback()

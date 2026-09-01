@@ -30,7 +30,7 @@ class EndToEndTests(unittest.TestCase):
         self.context = temp_database(salary=12000.0, salary_day=25)
         self.conn, self.user_id = self.context.__enter__()
         self.report = ingestion.import_statement(
-            self.conn, self.user_id, self.statement, salary_amount=12000.0)
+            self.conn, self.user_id, self.statement)
         self.pipeline = ingestion.post_import_pipeline(self.conn, self.user_id)
         self.user = self.conn.execute('SELECT * FROM User').fetchone()
 

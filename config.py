@@ -32,6 +32,15 @@ MAX_TRANSACTION_AGE_YEARS = 15   # older than this is almost certainly a typo
 FUTURE_DATE_GRACE_DAYS = 3       # allow a few days for pending/value-dated rows
 MAX_TRANSACTION_AMOUNT = 100_000_000.0   # 100M ZMW ceiling; above this is bad data
 
+# --- Salary detection (FR-04) ---------------------------------------------
+# The salary credit anchors the whole cycle analysis, so it must be identified
+# precisely: at most one per calendar month, matched on both amount and timing.
+# A credit is a salary candidate only if it is within SALARY_MATCH_TOLERANCE of
+# the declared salary AND within SALARY_DAY_WINDOW_DAYS of the declared pay day,
+# which keeps refunds and bonuses of a similar size from being mislabelled.
+SALARY_MATCH_TOLERANCE = 0.15    # +/- 15% of the declared salary amount
+SALARY_DAY_WINDOW_DAYS = 7       # within a week of the declared pay day
+
 # --- Behavioural Learning Phase (FR-05) -----------------------------------
 # The phase completes once the transaction history spans one full salary cycle.
 LEARNING_PHASE_DAYS = 30

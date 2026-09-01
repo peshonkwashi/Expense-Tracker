@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
 from services import ingestion  # noqa: E402
-from tests.helpers import temp_database, write_csv  # noqa: E402
+from tests.helpers import insert_transaction, temp_database, write_csv  # noqa: E402
 
 
 class ColumnResolutionTests(unittest.TestCase):
@@ -65,7 +65,7 @@ class ImportTests(unittest.TestCase):
         path = write_csv(headers, rows)
         try:
             return ingestion.import_statement(self.conn, self.user_id, path,
-                                              salary_amount=10000.0, today=today)
+                                              today=today)
         finally:
             os.unlink(path)
 
@@ -125,8 +125,7 @@ class ImportTests(unittest.TestCase):
             ('2026-02-25', 'SALARY CREDIT EMPLOYER', '', '10000.00'),
         ])
         try:
-            report = ingestion.import_statement(self.conn, self.user_id, path,
-                                                salary_amount=10000.0)
+            report = ingestion.import_statement(self.conn, self.user_id, path)
         finally:
             os.unlink(path)
         self.assertEqual(report['imported'], 2)
@@ -140,8 +139,7 @@ class ImportTests(unittest.TestCase):
             ('2026-03-25', 'SALARY CREDIT EMPLOYER', '10000.00'),
         ])
         try:
-            ingestion.import_statement(self.conn, self.user_id, path,
-                                       salary_amount=10000.0)
+            ingestion.import_statement(self.conn, self.user_id, path)
         finally:
             os.unlink(path)
         rows = self.conn.execute(
@@ -226,7 +224,7 @@ class DateRangeImportTests(unittest.TestCase):
         path = write_csv(('Date', 'Description', 'Amount', 'Type'), rows)
         try:
             return ingestion.import_statement(self.conn, self.user_id, path,
-                                              salary_amount=10000.0, today=today)
+                                              today=today)
         finally:
             os.unlink(path)
 
@@ -263,7 +261,7 @@ class AmountCeilingTests(unittest.TestCase):
         path = write_csv(('Date', 'Description', 'Amount', 'Type'), rows)
         try:
             return ingestion.import_statement(self.conn, self.user_id, path,
-                                              salary_amount=10000.0, today=today)
+                                              today=today)
         finally:
             os.unlink(path)
 
@@ -292,6 +290,94 @@ class AmountCeilingTests(unittest.TestCase):
         total = self.conn.execute(
             'SELECT SUM(amount) AS t FROM Transaction_Record').fetchone()['t']
         self.assertEqual(total, 1200.00)
+
+
+class SalaryDetectionTests(unittest.TestCase):
+    """FR-01 issue #3: identify the salary precisely, not every large credit."""
+
+    def setUp(self):
+        # Salary 10,000 on day 25 (temp_database defaults).
+        self.context = temp_database(salary=10000.0, salary_day=25)
+        self.conn, self.user_id = self.context.__enter__()
+
+    def tearDown(self):
+        self.context.__exit__(None, None, None)
+
+    def _credit(self, when, amount, desc='CREDIT'):
+        insert_transaction(self.conn, self.user_id, when, desc, amount,
+                           txn_type='CREDIT', category='Uncategorised')
+
+    def _flagged_dates(self):
+        return {r['transaction_date'] for r in self.conn.execute(
+            'SELECT transaction_date FROM Transaction_Record WHERE is_salary = 1')}
+
+    def test_day_of_month_distance_wraps(self):
+        self.assertEqual(ingestion._day_of_month_distance(25, 25), 0)
+        self.assertEqual(ingestion._day_of_month_distance(1, 30), 2)   # month wrap
+        self.assertEqual(ingestion._day_of_month_distance(10, 25), 15)
+
+    def test_salary_flagged_refund_ignored(self):
+        self._credit('2026-04-25', 10000.0, 'SALARY EMPLOYER')
+        self._credit('2026-04-26', 10000.0, 'Refund from shop')  # same size...
+        # ...but the refund is a day off the pay day and loses the tie-break;
+        # only one credit per month is chosen.
+        chosen = ingestion.detect_salary(self.conn, self.user_id)
+        self.assertEqual(len(chosen), 1)
+        self.assertEqual(self._flagged_dates(), {'2026-04-25'})
+
+    def test_one_salary_per_month_across_months(self):
+        self._credit('2026-04-25', 10000.0)
+        self._credit('2026-05-25', 10000.0)
+        self._credit('2026-06-24', 10050.0)
+        chosen = ingestion.detect_salary(self.conn, self.user_id)
+        self.assertEqual(len(chosen), 3)
+
+    def test_salary_sized_credit_far_from_payday_is_not_salary(self):
+        # Exactly salary-sized, but on the 10th when pay day is the 25th:
+        # distance 15 > window, so it is a coincidental credit, not salary.
+        self._credit('2026-04-10', 10000.0, 'Big refund')
+        chosen = ingestion.detect_salary(self.conn, self.user_id)
+        self.assertEqual(chosen, [])
+
+    def test_bonus_outside_tolerance_is_not_salary(self):
+        self._credit('2026-04-25', 10000.0, 'SALARY')
+        self._credit('2026-04-25', 20000.0, 'Annual bonus')  # 2x, out of band
+        ingestion.detect_salary(self.conn, self.user_id)
+        self.assertEqual(self._flagged_dates(), {'2026-04-25'})
+        # And the bonus row specifically is not flagged.
+        bonus = self.conn.execute(
+            "SELECT is_salary FROM Transaction_Record WHERE amount = 20000.0"
+        ).fetchone()['is_salary']
+        self.assertEqual(bonus, 0)
+
+    def test_two_salary_sized_credits_same_month_picks_nearest_payday(self):
+        self._credit('2026-04-22', 10000.0, 'Credit A')   # dist 3
+        self._credit('2026-04-25', 10000.0, 'Credit B')   # dist 0 -> salary
+        ingestion.detect_salary(self.conn, self.user_id)
+        self.assertEqual(self._flagged_dates(), {'2026-04-25'})
+
+    def test_minor_amount_variation_still_matches(self):
+        # Overtime/tax nudges net pay a little; within tolerance it still counts.
+        self._credit('2026-04-25', 10800.0)   # +8%, inside 15% band
+        chosen = ingestion.detect_salary(self.conn, self.user_id)
+        self.assertEqual(len(chosen), 1)
+
+    def test_redetection_is_idempotent(self):
+        self._credit('2026-04-25', 10000.0)
+        self._credit('2026-04-26', 10000.0)
+        ingestion.detect_salary(self.conn, self.user_id)
+        ingestion.detect_salary(self.conn, self.user_id)
+        count = self.conn.execute(
+            'SELECT COUNT(*) AS n FROM Transaction_Record WHERE is_salary = 1'
+        ).fetchone()['n']
+        self.assertEqual(count, 1)
+
+    def test_month_end_pay_day_wraps_to_first(self):
+        with temp_database(salary=10000.0, salary_day=30) as (conn, uid):
+            insert_transaction(conn, uid, '2026-05-01', 'SALARY', 10000.0,
+                               txn_type='CREDIT', category='Uncategorised')
+            chosen = ingestion.detect_salary(conn, uid)
+            self.assertEqual(len(chosen), 1)
 
 
 if __name__ == '__main__':

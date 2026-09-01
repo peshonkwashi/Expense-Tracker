@@ -269,9 +269,7 @@ def _handle_upload(conn, user):
     uploaded.save(filepath)
 
     try:
-        report = ingestion.import_statement(
-            conn, user['user_id'], filepath,
-            salary_amount=float(user['salary_amount']))
+        report = ingestion.import_statement(conn, user['user_id'], filepath)
     except ingestion.CsvValidationError as exc:
         flash(f'Upload rejected: {exc}', 'error')
         os.remove(filepath)
