@@ -119,6 +119,18 @@ def build_budget(conn, user, today=None, month_key=None):
     user_id = user['user_id']
     salary = float(user['salary_amount'])
 
+    # Actual expenditure this month across every category — not only those
+    # with a forecast row — so "spent this month" reconciles to the account.
+    # Salary stays the declared amount: it is the stable anchor the whole
+    # system budgets against, and must not be replaced by whatever credits
+    # landed this month, since a refund or transfer in is not a salary.
+    actual_expenditure = conn.execute(
+        "SELECT SUM(amount) AS total FROM Transaction_Record "
+        "WHERE user_id = ? AND transaction_type = 'DEBIT' "
+        "AND strftime('%Y-%m', transaction_date) = ?",
+        (user_id, month_key)).fetchone()['total']
+    true_spent_total = float(actual_expenditure) if actual_expenditure else 0.0
+
     forecasts = forecasting.generate_forecasts(conn, user_id, today=today)
     categories = database.category_map(conn)
     spent = actual_spend(conn, user_id, month_key)
@@ -229,7 +241,7 @@ def build_budget(conn, user, today=None, month_key=None):
         'essentials_exceed_income': essentials_exceed_income,
         'deficit': round(max(0.0, allocated + savings_reserved - salary), 2),
         'scale': round(scale, 3),
-        'spent_total': round(sum(row['spent'] for row in rows), 2),
+        'spent_total': round(true_spent_total, 2),
     }
 
 
