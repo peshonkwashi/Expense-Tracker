@@ -259,7 +259,7 @@ UNCATEGORISED_QUERY = (
     "FROM Transaction_Record t "
     "JOIN Category c ON t.category_id = c.category_id "
     "WHERE t.user_id = ? AND t.category_source != 'user' "
-    "AND c.category_name = 'Uncategorised'"
+    "AND c.category_name = 'Uncategorised' AND t.transaction_type = 'DEBIT'"
 )
 
 

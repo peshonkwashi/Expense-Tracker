@@ -321,8 +321,8 @@ def import_statement(conn, user_id, filepath, today=None):
                 # Salary is not decided here. Which credit is the salary depends
                 # on the whole month's credits (one per month, nearest the pay
                 # day), so it is resolved by detect_salary() after every row is
-                # in. Store as non-salary for now.
-                category_name, confidence, source = 'Uncategorised', None, 'default'
+                # in. Store as Income by default.
+                category_name, confidence, source = 'Income', None, 'default'
             else:
                 category_name, confidence, source = categorization.classify(description)
                 report['categorised'][category_name] += 1

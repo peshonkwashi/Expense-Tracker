@@ -104,4 +104,5 @@ INSERT OR IGNORE INTO Category (category_name, category_type) VALUES
 ('Shopping',      'DISCRETIONARY'),
 ('Personal Care', 'DISCRETIONARY'),
 ('Transfers',     'DISCRETIONARY'),
+('Income',        'ESSENTIAL'),
 ('Uncategorised', 'DISCRETIONARY');
