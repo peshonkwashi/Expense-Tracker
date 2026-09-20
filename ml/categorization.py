@@ -16,15 +16,25 @@ import threading
 
 import joblib
 import pandas as pd
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import f1_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
 import config
 import database
+
+# Feature columns the models train and predict on. Naive Bayes (the text-only
+# baseline) uses only 'text'; Random Forest additionally uses the numeric and
+# temporal features, which is the split the report describes in section 3.7.2
+# and 3.7.3 — RF as the more powerful alternative that can weigh non-text
+# signals (amount, and the day-of-week/day-of-month timing of paydays and bill
+# cycles) alongside the merchant text.
+FEATURE_COLUMNS = ['text', 'amount', 'day_of_week', 'day_of_month']
 
 # --- Rule seed -------------------------------------------------------------
 # Keyword -> category. Ordered: the first match wins, so specific merchants
@@ -76,6 +86,32 @@ def normalise(description):
     return re.sub(r'\s+', ' ', text).strip()
 
 
+def build_features(descriptions, amounts=None, dates=None):
+    """Build the model feature frame from raw transaction fields (section 3.7.2).
+
+    Columns: normalised merchant `text`, `amount`, and the `day_of_week` (0-6)
+    and `day_of_month` (1-31) the transaction fell on. Amount and dates are
+    optional so a bare description can still be classified (with neutral
+    defaults), which the fallback callers rely on.
+    """
+    descriptions = list(descriptions)
+    count = len(descriptions)
+    amounts = list(amounts) if amounts is not None else [0.0] * count
+    dates = list(dates) if dates is not None else [None] * count
+
+    parsed = pd.to_datetime(pd.Series(dates), errors='coerce')
+    day_of_week = parsed.dt.dayofweek.fillna(0).astype(int)
+    day_of_month = parsed.dt.day.fillna(1).astype(int)
+    amount = pd.to_numeric(pd.Series(amounts), errors='coerce').fillna(0.0)
+
+    return pd.DataFrame({
+        'text': [normalise(d) for d in descriptions],
+        'amount': amount.to_numpy(dtype=float),
+        'day_of_week': day_of_week.to_numpy(dtype=int),
+        'day_of_month': day_of_month.to_numpy(dtype=int),
+    }, columns=FEATURE_COLUMNS)
+
+
 def rule_category(description):
     """Return the seed category for a description, or None when unmatched."""
     text = normalise(description)
@@ -110,19 +146,23 @@ def reset_model_cache():
         _model_cache['mtime'] = None
 
 
-def classify(description):
-    """Assign a category to one description.
+def classify(description, amount=None, transaction_date=None):
+    """Assign a category to one transaction.
 
-    Returns (category_name, confidence, source) where source is 'model', 'rule'
-    or 'default'. The source is shown in the UI so the user can see why a
-    transaction was labelled the way it was (section 5.9, explainability).
+    Amount and date feed the Random Forest's non-text features; they are
+    optional so a description alone still classifies (Naive Bayes ignores them,
+    and the Random Forest falls back to neutral defaults). Returns
+    (category_name, confidence, source) where source is 'model', 'rule' or
+    'default' — surfaced in the UI so the user can see why a transaction was
+    labelled the way it was (section 5.9, explainability).
     """
     text = normalise(description)
     pipeline = _load_model()
 
     if pipeline is not None and text:
         try:
-            probabilities = pipeline.predict_proba([text])[0]
+            features = build_features([description], [amount], [transaction_date])
+            probabilities = pipeline.predict_proba(features)[0]
             best = probabilities.argmax()
             confidence = float(probabilities[best])
             if confidence >= config.MODEL_CONFIDENCE_FLOOR:
@@ -137,7 +177,8 @@ def classify(description):
 
 
 TRAINING_QUERY = (
-    "SELECT t.description, c.category_name, t.category_source "
+    "SELECT t.description, t.amount, t.transaction_date, "
+    "       c.category_name, t.category_source "
     "FROM Transaction_Record t "
     "JOIN Category c ON t.category_id = c.category_id "
     "WHERE t.transaction_type = 'DEBIT' AND c.category_name != 'Uncategorised'"
@@ -145,7 +186,11 @@ TRAINING_QUERY = (
 
 
 def training_frame(conn, user_id=None):
-    """Labelled examples: user corrections plus confidently labelled history."""
+    """Labelled examples: user corrections plus confidently labelled history.
+
+    Returns a frame carrying the label plus the FEATURE_COLUMNS, so the same
+    frame trains both the text-only baseline and the feature-rich Random Forest.
+    """
     query = TRAINING_QUERY
     params = []
     if user_id is not None:
@@ -157,9 +202,14 @@ def training_frame(conn, user_id=None):
         return frame
 
     frame['text'] = frame['description'].map(normalise)
-    frame = frame[frame['text'].str.len() > 0]
+    frame = frame[frame['text'].str.len() > 0].copy()
     if frame.empty:
         return frame
+
+    parsed = pd.to_datetime(frame['transaction_date'], errors='coerce')
+    frame['day_of_week'] = parsed.dt.dayofweek.fillna(0).astype(int)
+    frame['day_of_month'] = parsed.dt.day.fillna(1).astype(int)
+    frame['amount'] = pd.to_numeric(frame['amount'], errors='coerce').fillna(0.0)
 
     # A user correction is ground truth, so repeat it to weight it. This is the
     # cheapest way to let corrections outvote the rule seed for the same
@@ -170,18 +220,38 @@ def training_frame(conn, user_id=None):
     return frame
 
 
+def _tfidf():
+    return TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True, min_df=1)
+
+
 def _candidate_pipelines():
-    return {
-        'MultinomialNB': Pipeline([
-            ('tfidf', TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True, min_df=1)),
-            ('clf', MultinomialNB(alpha=0.1)),
-        ]),
-        'RandomForest': Pipeline([
-            ('tfidf', TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True, min_df=1)),
-            ('clf', RandomForestClassifier(n_estimators=200, random_state=42,
-                                           class_weight='balanced_subsample')),
-        ]),
-    }
+    """The two classifiers compared in section 3.7.3.
+
+    Naive Bayes is the text-only baseline: it takes just the TF-IDF of the
+    merchant description. Random Forest is the more powerful alternative that
+    also weighs the non-text features (section 3.7.2) — the normalised amount
+    and the day-of-week / day-of-month, which carry the payday and bill-cycle
+    timing that helps separate fixed recurring charges from ad-hoc spending.
+    Both consume the same FEATURE_COLUMNS frame; each pipeline selects what it
+    uses, so model selection and persistence stay uniform.
+    """
+    nb = Pipeline([
+        ('features', ColumnTransformer(
+            [('tfidf', _tfidf(), 'text')], remainder='drop')),
+        ('clf', MultinomialNB(alpha=0.1)),
+    ])
+    rf = Pipeline([
+        ('features', ColumnTransformer([
+            ('tfidf', _tfidf(), 'text'),
+            ('amount', MinMaxScaler(), ['amount']),
+            ('day_of_week', OneHotEncoder(categories=[list(range(7))],
+                                          handle_unknown='ignore'), ['day_of_week']),
+            ('day_of_month', 'passthrough', ['day_of_month']),
+        ], remainder='drop')),
+        ('clf', RandomForestClassifier(n_estimators=200, random_state=42,
+                                       class_weight='balanced_subsample')),
+    ])
+    return {'MultinomialNB': nb, 'RandomForest': rf}
 
 
 def train_categorization_model(conn, user_id=None):
@@ -210,7 +280,7 @@ def train_categorization_model(conn, user_id=None):
         result['reason'] = 'At least two spending categories are needed to train.'
         return result
 
-    features, labels = frame['text'], frame['category_name']
+    features, labels = frame[FEATURE_COLUMNS], frame['category_name']
 
     # Cross-validation needs every class present in every fold, so the fold
     # count is capped by the rarest class (section 3.7.4).
@@ -255,7 +325,7 @@ def train_categorization_model(conn, user_id=None):
 
 
 UNCATEGORISED_QUERY = (
-    "SELECT t.transaction_id, t.description "
+    "SELECT t.transaction_id, t.description, t.amount, t.transaction_date "
     "FROM Transaction_Record t "
     "JOIN Category c ON t.category_id = c.category_id "
     "WHERE t.user_id = ? AND t.category_source != 'user' "
@@ -274,7 +344,8 @@ def recategorise_uncategorised(conn, user_id):
 
     updated = 0
     for row in rows:
-        name, confidence, source = classify(row['description'])
+        name, confidence, source = classify(
+            row['description'], row['amount'], row['transaction_date'])
         if name == 'Uncategorised':
             continue
         conn.execute(

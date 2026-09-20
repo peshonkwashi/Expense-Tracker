@@ -94,6 +94,16 @@ it. `RULE_SEED` in `ml/categorization.py` assigns the first labels by keyword.
 From then on the model trains on those labels plus every user correction, and
 `category_source` on each transaction records which of the three assigned it.
 
+**Naive Bayes is the text-only baseline; Random Forest weighs more.** Per
+section 3.7.2, the two classifiers do not share a pipeline. Naive Bayes uses
+only the TF-IDF of the merchant description. Random Forest additionally uses the
+normalised amount and the day-of-week / day-of-month, which carry the payday and
+bill-cycle timing that can separate a fixed recurring charge from ad-hoc
+spending. A `ColumnTransformer` gives each model the features it uses from one
+shared frame. On clean data where merchant names are highly separable the two
+tie, and model selection keeps the simpler baseline; the extra features earn
+their place on noisier, real-world descriptions.
+
 **The forecaster stops at the last complete month.** Including the month in
 progress tells the model spending has collapsed and drags every forecast down.
 Missing months are also filled with zeros rather than skipped, because a

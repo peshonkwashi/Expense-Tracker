@@ -324,7 +324,8 @@ def import_statement(conn, user_id, filepath, today=None):
                 # in. Store as Income by default.
                 category_name, confidence, source = 'Income', None, 'default'
             else:
-                category_name, confidence, source = categorization.classify(description)
+                category_name, confidence, source = categorization.classify(
+                    description, amount, date_string)
                 report['categorised'][category_name] += 1
 
             cursor = conn.execute(

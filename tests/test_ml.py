@@ -103,6 +103,67 @@ class TrainingTests(unittest.TestCase):
             categorization.reset_model_cache()
 
 
+class FeatureEngineeringTests(unittest.TestCase):
+    """Section 3.7.2: RF weighs amount and date features; NB stays text-only."""
+
+    def test_build_features_extracts_amount_and_date(self):
+        frame = categorization.build_features(
+            ['Shoprite Manda Hill 8837'], [1200.0], ['2026-05-04'])  # a Monday
+        row = frame.iloc[0]
+        self.assertEqual(row['text'], 'shoprite manda hill 8837')
+        self.assertEqual(row['amount'], 1200.0)
+        self.assertEqual(row['day_of_month'], 4)
+        self.assertEqual(row['day_of_week'], 0)  # 2026-05-04 is a Monday
+
+    def test_build_features_defaults_when_amount_and_date_missing(self):
+        frame = categorization.build_features(['Some Shop'])
+        row = frame.iloc[0]
+        self.assertEqual(row['amount'], 0.0)
+        self.assertEqual(row['day_of_week'], 0)
+        self.assertEqual(row['day_of_month'], 1)
+
+    def test_naive_bayes_is_text_only(self):
+        nb = categorization._candidate_pipelines()['MultinomialNB']
+        columns = nb.named_steps['features'].transformers
+        used = {name for name, _, _ in columns}
+        self.assertEqual(used, {'tfidf'})
+
+    def test_random_forest_uses_text_and_non_text_features(self):
+        rf = categorization._candidate_pipelines()['RandomForest']
+        columns = rf.named_steps['features'].transformers
+        used = {name for name, _, _ in columns}
+        self.assertEqual(used, {'tfidf', 'amount', 'day_of_week', 'day_of_month'})
+
+    def test_random_forest_feature_matrix_includes_non_text_columns(self):
+        with temp_database() as (conn, user_id):
+            for index in range(12):
+                insert_transaction(conn, user_id, f'2026-01-{index + 1:02d}',
+                                   'Shoprite Manda Hill', 100.0, category='Groceries')
+                insert_transaction(conn, user_id, f'2026-02-{index + 1:02d}',
+                                   'Fuel Puma Station', 100.0, category='Transport')
+            frame = categorization.training_frame(conn, user_id)
+            rf = categorization._candidate_pipelines()['RandomForest']
+            rf.fit(frame[categorization.FEATURE_COLUMNS], frame['category_name'])
+            names = list(rf.named_steps['features'].get_feature_names_out())
+            self.assertTrue(any(n.startswith('amount__') for n in names))
+            self.assertTrue(any('day_of_week' in n for n in names))
+            self.assertTrue(any(n.startswith('tfidf__') for n in names))
+
+    def test_classify_accepts_amount_and_date(self):
+        with temp_database() as (conn, user_id):
+            for index in range(12):
+                insert_transaction(conn, user_id, f'2026-01-{index + 1:02d}',
+                                   'Shoprite Manda Hill', 120.0, category='Groceries')
+                insert_transaction(conn, user_id, f'2026-02-{index + 1:02d}',
+                                   'Fuel Puma Station', 800.0, category='Transport')
+            categorization.train_categorization_model(conn, user_id)
+            name, confidence, source = categorization.classify(
+                'Shoprite Kabwata', 130.0, '2026-03-05')
+            self.assertEqual(name, 'Groceries')
+            self.assertEqual(source, 'model')
+            categorization.reset_model_cache()
+
+
 class SubscriptionTests(unittest.TestCase):
     def _rows(self, entries):
         return [{'transaction_id': index, 'transaction_date': when,
