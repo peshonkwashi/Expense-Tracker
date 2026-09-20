@@ -30,3 +30,8 @@ Thumbs.db
 
 # Proposal / report documents — keep out of the public repo
 *.pdf
+
+# Scratch / experimental files (not part of the project)
+check.py
+test_jinja.py
+/sample_data.csv

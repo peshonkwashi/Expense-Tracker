@@ -116,22 +116,50 @@ correction.</p>
                         </span>
                     </td>
                     <td class="no-print">
-                        {% if txn['transaction_type'] == 'DEBIT' %}
-                        <form class="inline-form" method="POST"
-                              action="{{ url_for('recategorise', transaction_id=txn['transaction_id']) }}">
-                            <select name="category_name" class="small">
-                                {% for category in categories %}
-                                <option value="{{ category['category_name'] }}"
-                                    {% if category['category_name'] == txn['category_name'] %}selected{% endif %}>
-                                    {{ category['category_name'] }}
-                                </option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit" class="secondary small">Save</button>
-                        </form>
-                        {% endif %}
+                        <div style="display: flex; gap: 5px; flex-direction: column;">
+                            <form class="inline-form" method="POST"
+                                  action="{{ url_for('recategorise', transaction_id=txn['transaction_id']) }}">
+                                <select name="category_name" class="small">
+                                    {% for category in categories %}
+                                    <option value="{{ category['category_name'] }}"
+                                        {% if category['category_name'] == txn['category_name'] %}selected{% endif %}>
+                                        {{ category['category_name'] }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                                <button type="submit" class="secondary small">Save</button>
+                            </form>
+                            {% if txn['transaction_type'] == 'DEBIT' %}
+                                {% if txn['transaction_id'] not in items_by_txn and txn['is_subscription'] != 1 %}
+                                <form class="inline-form" method="POST"
+                                      action="{{ url_for('upload_receipt', transaction_id=txn['transaction_id']) }}" enctype="multipart/form-data">
+                                    <input type="file" name="receipt" accept="image/*" class="small" style="max-width: 150px;">
+                                    <button type="submit" class="secondary small" title="Mock OCR: Extracts items to match total">Scan Receipt</button>
+                                </form>
+                                {% endif %}
+                            {% endif %}
+                        </div>
                     </td>
                 </tr>
+                {% if txn['transaction_id'] in items_by_txn %}
+                <tr class="receipt-row" style="background: #f9f9f9;">
+                    <td colspan="7">
+                        <div style="padding: 10px 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <strong>🧾 Itemized Receipt (OCR Extracted):</strong>
+                                <form method="POST" action="{{ url_for('clear_receipt', transaction_id=txn['transaction_id']) }}" style="margin: 0;">
+                                    <button type="submit" class="secondary small" style="background: transparent; border: 1px solid #ccc; color: #666;">Clear Receipt</button>
+                                </form>
+                            </div>
+                            <ul style="margin-top: 5px; margin-bottom: 0;">
+                                {% for item in items_by_txn[txn['transaction_id']] %}
+                                <li>{{ item.quantity }}x {{ item.item_name }} - {{ item.amount|money }} ZMW</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    </td>
+                </tr>
+                {% endif %}
                 {% endfor %}
             </tbody>
         </table>

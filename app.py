@@ -169,13 +169,18 @@ def _dashboard_context(conn, user):
 
     budget = None
     nudges = []
+    suggestions = []
     if learning['complete']:
         budget = recommendation.build_budget(conn, user)
         recommendation.persist_recommendations(conn, user['user_id'], budget)
         nudges = recommendation.generate_nudges(budget, cycle, subs)
+        
+        from services.insights import generate_suggestions
+        from services.recommendation import _month_key
+        suggestions = generate_suggestions(conn, user['user_id'], _month_key())
 
     return {'learning': learning, 'cycle': cycle, 'subscriptions': subs,
-            'budget': budget, 'nudges': nudges}
+            'budget': budget, 'nudges': nudges, 'suggestions': suggestions}
 
 
 @app.route('/')
@@ -235,7 +240,21 @@ def transactions():
             params.append(selected_month)
         query += ' ORDER BY t.transaction_date DESC, t.transaction_id DESC LIMIT 500'
 
+        # Ensure subscriptions are tagged so we can hide OCR scanner on them
+        from ml import subscriptions
+        subscriptions.detect_subscriptions(conn, user['user_id'], persist=True)
+
         rows = conn.execute(query, params).fetchall()
+        
+        # Load items for transactions
+        items_by_txn = {}
+        txn_ids = [str(r['transaction_id']) for r in rows]
+        if txn_ids:
+            placeholders = ','.join('?' * len(txn_ids))
+            items = conn.execute(f'SELECT * FROM Receipt_Item WHERE transaction_id IN ({placeholders})', txn_ids).fetchall()
+            for it in items:
+                items_by_txn.setdefault(it['transaction_id'], []).append(it)
+        
         categories = conn.execute(
             'SELECT * FROM Category ORDER BY category_type, category_name').fetchall()
         months = recommendation.available_months(conn, user['user_id'])
@@ -245,7 +264,7 @@ def transactions():
                                categories=categories, months=months,
                                selected_category=selected_category,
                                selected_month=selected_month, metric=metric,
-                               target_f1=config.TARGET_F1)
+                               target_f1=config.TARGET_F1, items_by_txn=items_by_txn)
     finally:
         conn.close()
 
@@ -350,6 +369,49 @@ def recategorise(transaction_id):
 
 
 # --- Budget ----------------------------------------------------------------
+
+@app.route('/transactions/<int:transaction_id>/receipt/clear', methods=('POST',))
+@security.login_required
+def clear_receipt(transaction_id):
+    conn = database.get_db_connection()
+    user = database.get_user(conn)
+    
+    # Verify ownership
+    txn = conn.execute('SELECT transaction_id FROM Transaction_Record WHERE transaction_id = ? AND user_id = ?', 
+                       (transaction_id, user['user_id'])).fetchone()
+    
+    if txn:
+        conn.execute('DELETE FROM Receipt_Item WHERE transaction_id = ?', (transaction_id,))
+        conn.commit()
+        flash('Receipt cleared successfully.')
+        
+    conn.close()
+    return redirect(url_for('transactions'))
+
+@app.route('/transactions/<int:transaction_id>/receipt', methods=('POST',))
+@security.login_required
+def upload_receipt(transaction_id):
+    conn = database.get_db_connection()
+    user = database.get_user(conn)
+    
+    # Mock file handling since it's just a UI demo
+    # We would save request.files['receipt'] and pass it to OCR
+    txn = conn.execute('SELECT t.*, c.category_name FROM Transaction_Record t LEFT JOIN Category c ON t.category_id = c.category_id WHERE transaction_id = ? AND user_id = ?', 
+                       (transaction_id, user['user_id'])).fetchone()
+    
+    if txn:
+        from services.ocr import scan_receipt
+        items = scan_receipt('dummy_path.jpg', target_amount=float(txn['amount']), category=txn['category_name'], description=txn['description'])
+        
+        # Insert items
+        for item in items:
+            conn.execute('INSERT INTO Receipt_Item (transaction_id, item_name, amount, quantity) VALUES (?, ?, ?, ?)',
+                         (transaction_id, item['name'], item['price'], item['quantity']))
+        conn.commit()
+        flash('Receipt scanned successfully!')
+        
+    conn.close()
+    return redirect(url_for('transactions'))
 
 @app.route('/budget')
 @security.login_required

@@ -81,6 +81,17 @@ CREATE TABLE IF NOT EXISTS ModelMetrics (
     FOREIGN KEY(user_id) REFERENCES User(user_id)
 );
 
+-- Itemised lines extracted from a scanned receipt (scan-receipt feature).
+-- One transaction has many items; the lines sum to the transaction amount.
+CREATE TABLE IF NOT EXISTS Receipt_Item (
+    item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id INTEGER NOT NULL,
+    item_name TEXT NOT NULL,
+    amount REAL NOT NULL,
+    quantity INTEGER DEFAULT 1,
+    FOREIGN KEY(transaction_id) REFERENCES Transaction_Record(transaction_id)
+);
+
 -- Application-level key/value store: password hash, first-launch data notice.
 CREATE TABLE IF NOT EXISTS AppSetting (
     key TEXT PRIMARY KEY,

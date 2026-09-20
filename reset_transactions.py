@@ -104,6 +104,12 @@ def main():
             conn.execute('DELETE FROM BudgetRecommendation')
             conn.execute('DELETE FROM ModelMetrics')
             conn.execute('UPDATE Transaction_Record SET is_subscription = 0')
+            # Clear receipt items orphaned by the transaction delete (scan-receipt
+            # feature). Guarded, since older databases may not have the table.
+            if conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                            "AND name='Receipt_Item'").fetchone():
+                conn.execute('DELETE FROM Receipt_Item WHERE transaction_id NOT IN '
+                             '(SELECT transaction_id FROM Transaction_Record)')
             conn.commit()
         except Exception:
             conn.rollback()

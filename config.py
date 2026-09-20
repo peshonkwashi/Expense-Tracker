@@ -65,3 +65,10 @@ SUBSCRIPTION_MAX_INTERVAL_DAYS = 38
 ESSENTIAL_BUFFER = 0.05          # 5% headroom on essential categories
 NUDGE_THRESHOLD = 0.80           # alert at 80% of the recommended allocation
 DEFAULT_SAVINGS_RATE = 0.10      # floor applied when the user has no goals
+
+# --- Smart suggestions (dashboard insights) -------------------------------
+# Thresholds for the plain-language savings suggestions on the dashboard.
+SUGGEST_HIGH_FREQUENCY_VISITS = 4      # more trips than this to one shop -> suggest
+SUGGEST_CONCENTRATION_SHARE = 0.50     # one merchant over half a discretionary category
+SUGGEST_SUBSCRIPTION_MIN_COUNT = 2     # need at least this many subscriptions to nudge
+SUGGEST_SUBSCRIPTION_SALARY_SHARE = 0.05   # subscriptions >= 5% of salary -> review

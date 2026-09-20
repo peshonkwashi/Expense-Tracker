@@ -26,6 +26,22 @@
 </div>
 {% endif %}
 
+{% if suggestions %}
+<div class="card" style="margin-bottom:1.25rem;">
+    <h2>💡 Smart Suggestions</h2>
+    <p class="muted" style="margin:-.3rem 0 .8rem;">Opportunities to save, based
+    on how you actually spend this month.</p>
+    <div class="grid" style="gap:.75rem; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));">
+        {% for suggestion in suggestions %}
+        <div class="nudge {{ 'warning' if suggestion.type == 'warning' else 'info' }}">
+            <div class="title">{{ suggestion.title }}</div>
+            <div>{{ suggestion.message }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
 {% if budget %}
 <div class="grid four" style="margin-bottom:1.25rem;">
     <div class="stat">
