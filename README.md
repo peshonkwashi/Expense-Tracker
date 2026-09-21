@@ -149,6 +149,22 @@ On an 8-month synthetic dataset (K8,000 salary, pay day 30) the current
 implementation reports macro F1 of 0.99 and a forecast MAE of 11.4% of mean
 actual spend — both inside their targets.
 
+**The categorisation evaluation is reproducible in a notebook.**
+`notebooks/categorisation_evaluation.ipynb` runs the full Naive Bayes vs Random
+Forest bake-off end to end — generating synthetic data, cross-validating both
+models, and showing per-category precision/recall/F1 and a confusion matrix
+against the 0.85 target. The measurement logic lives in `ml/evaluation.py`
+(imported by the notebook and unit-tested), so the numbers are not hand-typed.
+The notebook needs the development tools:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+```bash
+jupyter notebook notebooks/categorisation_evaluation.ipynb
+```
+
 Macro F1 is sensitive to small classes: it averages per-category scores
 regardless of support, so a category with two examples counts as much as one
 with fifty. An earlier synthetic dataset scored 0.83 macro F1 at 98% accuracy
@@ -187,13 +203,17 @@ security.py               Password, session timeout, secret key
 generate_sample_data.py   Synthetic bank statement generator
 ml/
   categorization.py       TF-IDF + Naive Bayes / Random Forest (FR-02)
+  evaluation.py           Cross-validated NB vs RF comparison (section 3.7.4)
   forecasting.py          ARIMA forecasting and evaluation (FR-06)
   subscriptions.py        Recurring charge detection (FR-08)
 services/
   ingestion.py            CSV validation, parsing, dedup (FR-01)
   behavioural.py          Learning phase, salary-cycle analysis (FR-05)
   recommendation.py       Budgets, nudges, savings, reports (FR-07/09/11/12)
+  insights.py             Smart Suggestions engine (dashboard)
+  ocr.py                  Mock OCR for the scan-receipt feature
 templates/                Jinja2 templates, one per screen
 static/                   Stylesheet and chart rendering
-tests/                    111 unit, route and integration tests
+notebooks/                Reproducible model-evaluation notebook
+tests/                    unit, route and integration tests
 ```

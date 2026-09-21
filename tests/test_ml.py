@@ -7,7 +7,7 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
-from ml import categorization, forecasting, subscriptions  # noqa: E402
+from ml import categorization, evaluation, forecasting, subscriptions  # noqa: E402
 from tests.helpers import insert_transaction, temp_database  # noqa: E402
 
 
@@ -162,6 +162,60 @@ class FeatureEngineeringTests(unittest.TestCase):
             self.assertEqual(name, 'Groceries')
             self.assertEqual(source, 'model')
             categorization.reset_model_cache()
+
+
+class EvaluationTests(unittest.TestCase):
+    """Section 3.7.4: the cross-validated NB-vs-RF comparison used by the report."""
+
+    def _labelled_frame(self, conn, user_id):
+        merchants = [('Shoprite Manda Hill', 'Groceries'),
+                     ('Pick n Pay Levy', 'Groceries'),
+                     ('Fuel Puma Kabulonga', 'Transport'),
+                     ('Engen Great East Road', 'Transport'),
+                     ('ZESCO Prepaid Units', 'Utilities'),
+                     ('LWSC Water Bill', 'Utilities')]
+        for index in range(6):
+            for description, category in merchants:
+                insert_transaction(conn, user_id, f'2026-01-{index + 1:02d}',
+                                   description, 100.0 + index, category=category)
+        return categorization.training_frame(conn, user_id)
+
+    def test_evaluates_both_candidates(self):
+        with temp_database() as (conn, user_id):
+            frame = self._labelled_frame(conn, user_id)
+            results, n_splits = evaluation.evaluate_candidates(frame)
+            self.assertEqual(set(results), {'MultinomialNB', 'RandomForest'})
+            self.assertGreaterEqual(n_splits, 2)
+            for r in results.values():
+                self.assertTrue(0.0 <= r['macro_f1'] <= 1.0)
+                self.assertIn('report', r)
+                # Confusion matrix is square over the label set.
+                self.assertEqual(r['confusion'].shape,
+                                 (len(r['labels']), len(r['labels'])))
+
+    def test_best_model_and_target(self):
+        with temp_database() as (conn, user_id):
+            frame = self._labelled_frame(conn, user_id)
+            results, _ = evaluation.evaluate_candidates(frame)
+            name, f1 = evaluation.best_model(results)
+            self.assertIn(name, results)
+            self.assertEqual(f1, max(r['macro_f1'] for r in results.values()))
+            self.assertEqual(evaluation.meets_target(0.90), True)
+            self.assertEqual(evaluation.meets_target(0.50), False)
+
+    def test_empty_frame_raises(self):
+        import pandas as pd
+        with self.assertRaises(ValueError):
+            evaluation.evaluate_candidates(pd.DataFrame())
+
+    def test_single_category_raises(self):
+        with temp_database() as (conn, user_id):
+            for index in range(6):
+                insert_transaction(conn, user_id, f'2026-01-{index + 1:02d}',
+                                   'Shoprite Manda Hill', 100.0, category='Groceries')
+            frame = categorization.training_frame(conn, user_id)
+            with self.assertRaises(ValueError):
+                evaluation.evaluate_candidates(frame)
 
 
 class SubscriptionTests(unittest.TestCase):

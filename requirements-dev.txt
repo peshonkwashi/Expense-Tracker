@@ -1,0 +1,10 @@
+# Development-only dependencies — NOT needed to run the Flask application.
+# These support the model-evaluation notebook (notebooks/) and its execution.
+# The app itself runs on requirements.txt alone.
+#
+#   pip install -r requirements-dev.txt
+
+matplotlib==3.11.2     # confusion-matrix plot in the evaluation notebook
+nbformat==5.11.1       # build/read .ipynb notebooks
+nbconvert==7.17.1      # execute notebooks and embed outputs
+ipykernel==7.3.0       # the kernel nbconvert runs the notebook on
