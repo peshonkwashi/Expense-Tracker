@@ -162,6 +162,17 @@ On an 8-month synthetic dataset (K8,000 salary, pay day 30) the current
 implementation reports macro F1 of 0.99 and a forecast MAE of 11.4% of mean
 actual spend — both inside their targets.
 
+**Forecast error is higher on real data than on synthetic data.** The 11.4%
+above is on smooth, habitual synthetic spending. On real transactions the
+forecast MAE has been observed above the 15% target (around 20% on one month),
+driven by genuine month-to-month variance — a category that is sporadic
+(spending some months, none others) or a one-off dip, which the simple
+mean/median/ARIMA forecaster handles poorly. The metric is also computed on
+whichever month is the latest *complete* one, so it shifts as data is added.
+This is an honest limitation of the current forecaster rather than a fault, and
+motivates the Sprint 4 forecasting work (evaluating against Linear Regression
+and making the model salary-cycle-aware).
+
 **The categorisation evaluation is reproducible in a notebook.**
 `notebooks/categorisation_evaluation.ipynb` runs the full Naive Bayes vs Random
 Forest bake-off end to end — generating synthetic data, cross-validating both
