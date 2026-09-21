@@ -51,6 +51,12 @@ MIN_TRAINING_SAMPLES = 20        # below this the rule seed carries the system
 MODEL_CONFIDENCE_FLOOR = 0.60    # below this we fall back to the rule seed
 TARGET_F1 = 0.85                 # NFR-02 acceptance criterion
 
+# Curated labelled seed dataset used to bootstrap the model (section 3.7.1).
+# It gives the classifier diverse, hand-labelled merchant examples from the
+# first upload, before the user has accumulated their own labelled history.
+SEED_DATASET_PATH = os.path.join(BASE_DIR, 'data', 'seed_transactions.csv')
+USE_SEED_DATASET = True
+
 # --- Forecasting (FR-06, NFR-03) ------------------------------------------
 MIN_MONTHS_FOR_ARIMA = 4
 MAX_MAE_RATIO = 0.15             # NFR-03 acceptance criterion

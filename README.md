@@ -104,6 +104,19 @@ shared frame. On clean data where merchant names are highly separable the two
 tie, and model selection keeps the simpler baseline; the extra features earn
 their place on noisier, real-world descriptions.
 
+**A curated seed dataset bootstraps the cold start; the user's data takes
+over.** Training data preparation (section 3.7.1) has two sources.
+`data/seed_transactions.csv` is a hand-labelled set of ~80 diverse merchant
+descriptions across all spending categories, preprocessed the same way as real
+transactions (lowercase, punctuation stripped, whitespace collapsed via
+`normalise`; ISO date standardisation and amount coercion in the ingestion
+layer). The trainer includes it **only while the user's own labelled data is
+too thin to train on alone** — so a usable model exists from the first upload,
+and once the user has enough of their own transactions their patterns take over.
+This matters for the reported F1: a mature user is measured on their own
+transactions (the thing NFR-02 is about), not on the generic seed, whose many
+small, single-example categories would otherwise drag the macro average down.
+
 **The forecaster stops at the last complete month.** Including the month in
 progress tells the model spending has collapsed and drags every forecast down.
 Missing months are also filled with zeros rather than skipped, because a
@@ -199,6 +212,7 @@ app.py                    Flask routes (Presentation Layer)
 config.py                 All tunable constants and paths
 database.py               Connection, schema init, migrations
 schema.sql                Table definitions and seed categories
+data/                     Curated labelled seed dataset (training data prep)
 security.py               Password, session timeout, secret key
 generate_sample_data.py   Synthetic bank statement generator
 ml/

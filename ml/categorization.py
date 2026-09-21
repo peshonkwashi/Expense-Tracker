@@ -77,6 +77,7 @@ _COMPILED_RULES = [(re.compile(p, re.IGNORECASE), name) for p, name in RULE_SEED
 
 _model_lock = threading.Lock()
 _model_cache = {'pipeline': None, 'mtime': None}
+_seed_cache = {'frame': None, 'mtime': None}
 
 
 def normalise(description):
@@ -185,11 +186,48 @@ TRAINING_QUERY = (
 )
 
 
-def training_frame(conn, user_id=None):
-    """Labelled examples: user corrections plus confidently labelled history.
+def reset_seed_cache():
+    _seed_cache['frame'] = None
+    _seed_cache['mtime'] = None
+
+
+def load_seed_frame():
+    """Load and preprocess the curated seed dataset (section 3.7.1).
+
+    Returns a frame with `category_name`, the FEATURE_COLUMNS and a
+    `category_source` of 'seed', or an empty frame when the seed is disabled or
+    absent. The seed carries hand-labelled merchant text with neutral non-text
+    features (no real amount or date), so it is text-labelled examples rather
+    than full transactions — its value is giving the classifier diverse
+    merchant variants per category from the first upload. Cached and reloaded
+    when the file changes.
+    """
+    path = config.SEED_DATASET_PATH
+    if not config.USE_SEED_DATASET or not os.path.exists(path):
+        return pd.DataFrame()
+
+    mtime = os.path.getmtime(path)
+    if _seed_cache['frame'] is None or _seed_cache['mtime'] != mtime:
+        raw = pd.read_csv(path, dtype=str, keep_default_na=False)
+        raw = raw[(raw['description'].str.strip() != '')
+                  & (raw['category'].str.strip() != '')]
+        frame = build_features(raw['description'].tolist())  # neutral amount/date
+        frame['category_name'] = raw['category'].str.strip().to_numpy()
+        frame['category_source'] = 'seed'
+        frame = frame[frame['text'].str.len() > 0].reset_index(drop=True)
+        _seed_cache['frame'] = frame
+        _seed_cache['mtime'] = mtime
+    return _seed_cache['frame'].copy()
+
+
+def training_frame(conn, user_id=None, include_seed=False):
+    """The user's own labelled transactions as a feature frame.
 
     Returns a frame carrying the label plus the FEATURE_COLUMNS, so the same
     frame trains both the text-only baseline and the feature-rich Random Forest.
+    By default this is the user's data alone — the measure NFR-02 is about.
+    Pass include_seed=True to append the curated seed (the trainer does this
+    only to bootstrap a cold start; see train_categorization_model).
     """
     query = TRAINING_QUERY
     params = []
@@ -198,26 +236,33 @@ def training_frame(conn, user_id=None):
         params.append(user_id)
 
     frame = pd.read_sql_query(query, conn, params=params)
-    if frame.empty:
-        return frame
+    parts = []
 
-    frame['text'] = frame['description'].map(normalise)
-    frame = frame[frame['text'].str.len() > 0].copy()
-    if frame.empty:
-        return frame
+    if not frame.empty:
+        frame['text'] = frame['description'].map(normalise)
+        frame = frame[frame['text'].str.len() > 0].copy()
+    if not frame.empty:
+        parsed = pd.to_datetime(frame['transaction_date'], errors='coerce')
+        frame['day_of_week'] = parsed.dt.dayofweek.fillna(0).astype(int)
+        frame['day_of_month'] = parsed.dt.day.fillna(1).astype(int)
+        frame['amount'] = pd.to_numeric(frame['amount'], errors='coerce').fillna(0.0)
 
-    parsed = pd.to_datetime(frame['transaction_date'], errors='coerce')
-    frame['day_of_week'] = parsed.dt.dayofweek.fillna(0).astype(int)
-    frame['day_of_month'] = parsed.dt.day.fillna(1).astype(int)
-    frame['amount'] = pd.to_numeric(frame['amount'], errors='coerce').fillna(0.0)
+        # A user correction is ground truth, so repeat it to weight it. This is
+        # the cheapest way to let corrections outvote the seed for the same
+        # merchant without threading sample_weight through the pipeline.
+        corrections = frame[frame['category_source'] == 'user']
+        if not corrections.empty:
+            frame = pd.concat([frame] + [corrections] * 2, ignore_index=True)
+        parts.append(frame)
 
-    # A user correction is ground truth, so repeat it to weight it. This is the
-    # cheapest way to let corrections outvote the rule seed for the same
-    # merchant without threading sample_weight through the pipeline.
-    corrections = frame[frame['category_source'] == 'user']
-    if not corrections.empty:
-        frame = pd.concat([frame] + [corrections] * 2, ignore_index=True)
-    return frame
+    if include_seed:
+        seed = load_seed_frame()
+        if not seed.empty:
+            parts.append(seed)
+
+    if not parts:
+        return pd.DataFrame()
+    return pd.concat(parts, ignore_index=True)
 
 
 def _tfidf():
@@ -254,15 +299,35 @@ def _candidate_pipelines():
     return {'MultinomialNB': nb, 'RandomForest': rf}
 
 
-def train_categorization_model(conn, user_id=None):
+def train_categorization_model(conn, user_id=None, include_seed=None):
     """Evaluate both classifiers, persist the better one, record NFR-02 metrics.
 
     Returns a result dict. 'trained' is False when there is not yet enough
-    labelled data, in which case the rule seed keeps carrying the system.
+    labelled data, in which case the rule seed keeps carrying the system. The
+    curated seed dataset is included in training by default (section 3.7.1), so
+    a usable model exists from the first upload; pass include_seed=False to
+    train on the user's own data alone.
     """
-    frame = training_frame(conn, user_id)
+    frame = training_frame(conn, user_id, include_seed=False)
     result = {'trained': False, 'reason': None, 'algorithm': None,
-              'f1': None, 'samples': 0, 'classes': 0, 'scores': {}}
+              'f1': None, 'samples': 0, 'classes': 0, 'scores': {},
+              'bootstrapped': False}
+
+    # Bootstrap with the curated seed only while the user's own data is too thin
+    # to train on alone (section 3.7.1: the seed is for *initial* seeding). Once
+    # they have enough of their own, their patterns take over and the reported
+    # F1 reflects their real transactions — the measure NFR-02 is about.
+    if include_seed is None:
+        insufficient = (frame.empty
+                        or len(frame) < config.MIN_TRAINING_SAMPLES
+                        or frame['category_name'].nunique() < 2)
+        include_seed = insufficient
+    if include_seed:
+        seed = load_seed_frame()
+        if not seed.empty:
+            frame = (pd.concat([frame, seed], ignore_index=True)
+                     if not frame.empty else seed)
+            result['bootstrapped'] = True
 
     if frame.empty:
         result['reason'] = 'No labelled transactions yet.'

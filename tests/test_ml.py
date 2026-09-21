@@ -56,11 +56,23 @@ class RuleSeedTests(unittest.TestCase):
 
 class TrainingTests(unittest.TestCase):
     def test_refuses_to_train_on_too_little_data(self):
+        # Without the seed, a single labelled transaction is too little to train.
         with temp_database() as (conn, user_id):
             insert_transaction(conn, user_id, '2026-01-01', 'Shoprite', 100.0)
-            result = categorization.train_categorization_model(conn, user_id)
+            result = categorization.train_categorization_model(
+                conn, user_id, include_seed=False)
             self.assertFalse(result['trained'])
             self.assertIn('needed to train', result['reason'])
+
+    def test_seed_lets_the_model_train_from_the_first_upload(self):
+        # With the curated seed included (the default), a model exists even
+        # when the user has only just started (section 3.7.1).
+        with temp_database() as (conn, user_id):
+            insert_transaction(conn, user_id, '2026-01-01', 'Shoprite Manda Hill',
+                               100.0, category='Groceries')
+            result = categorization.train_categorization_model(conn, user_id)
+            self.assertTrue(result['trained'], result['reason'])
+            self.assertGreater(result['samples'], 20)
 
     def test_trains_and_records_metrics(self):
         with temp_database() as (conn, user_id):
@@ -213,9 +225,75 @@ class EvaluationTests(unittest.TestCase):
             for index in range(6):
                 insert_transaction(conn, user_id, f'2026-01-{index + 1:02d}',
                                    'Shoprite Manda Hill', 100.0, category='Groceries')
-            frame = categorization.training_frame(conn, user_id)
+            # Evaluate the user's own data in isolation (no seed), which has
+            # only one category, so cross-validation cannot run.
+            frame = categorization.training_frame(conn, user_id, include_seed=False)
             with self.assertRaises(ValueError):
                 evaluation.evaluate_candidates(frame)
+
+
+class SeedDatasetTests(unittest.TestCase):
+    """Section 3.7.1: the curated labelled seed dataset for model bootstrapping."""
+
+    def setUp(self):
+        categorization.reset_seed_cache()
+
+    def tearDown(self):
+        categorization.reset_seed_cache()
+
+    def test_seed_loads_with_the_feature_columns(self):
+        seed = categorization.load_seed_frame()
+        self.assertFalse(seed.empty)
+        for column in categorization.FEATURE_COLUMNS + ['category_name']:
+            self.assertIn(column, seed.columns)
+        self.assertTrue((seed['category_source'] == 'seed').all())
+        # Text is preprocessed (lowercased, punctuation stripped).
+        self.assertTrue(seed['text'].str.islower().all())
+
+    def test_every_seed_category_exists_in_the_schema(self):
+        with temp_database() as (conn, _user_id):
+            valid = {row['category_name'] for row in conn.execute(
+                'SELECT category_name FROM Category')}
+        seed = categorization.load_seed_frame()
+        self.assertTrue(set(seed['category_name']).issubset(valid))
+
+    def test_training_frame_is_user_data_only_by_default(self):
+        # Default is the user's own data (the measure NFR-02 is about); the seed
+        # is appended only on request.
+        with temp_database() as (conn, user_id):
+            insert_transaction(conn, user_id, '2026-01-01', 'Shoprite Manda Hill',
+                               100.0, category='Groceries')
+            default = categorization.training_frame(conn, user_id)
+            with_seed = categorization.training_frame(conn, user_id,
+                                                      include_seed=True)
+            self.assertEqual(len(default), 1)
+            self.assertGreater(len(with_seed), len(default))
+
+    def test_mature_user_is_trained_without_the_seed(self):
+        # Enough of their own data across categories: no bootstrap, so the
+        # reported F1 reflects the user's real transactions.
+        merchants = [('Shoprite Manda Hill', 'Groceries'),
+                     ('Fuel Puma Kabulonga', 'Transport'),
+                     ('ZESCO Prepaid Units', 'Utilities')]
+        with temp_database() as (conn, user_id):
+            for index in range(10):
+                for description, category in merchants:
+                    insert_transaction(conn, user_id, f'2026-01-{index + 1:02d}',
+                                       description, 100.0 + index, category=category)
+            result = categorization.train_categorization_model(conn, user_id)
+            self.assertTrue(result['trained'], result['reason'])
+            self.assertFalse(result['bootstrapped'])
+
+    def test_seed_disabled_by_config(self):
+        import config
+        original = config.USE_SEED_DATASET
+        config.USE_SEED_DATASET = False
+        categorization.reset_seed_cache()
+        try:
+            self.assertTrue(categorization.load_seed_frame().empty)
+        finally:
+            config.USE_SEED_DATASET = original
+            categorization.reset_seed_cache()
 
 
 class SubscriptionTests(unittest.TestCase):
