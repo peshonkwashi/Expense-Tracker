@@ -218,3 +218,29 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
     body { background: #fff; }
     .card { box-shadow: none; border-color: #ccc; }
 }
+
+/* Progress bars (traffic-light: green = good/on-track, red = over/behind).
+   Always paired with a text value in the markup so meaning is not colour-only. */
+.progress-container { width: 100%; background-color: var(--line); border-radius: 4px; margin-top: 0.4rem; height: 12px; overflow: hidden; }
+.progress-bar { height: 100%; border-radius: 4px; transition: width 0.3s ease; }
+.progress-bar.green { background-color: var(--ok); }
+.progress-bar.yellow { background-color: var(--warn); }
+.progress-bar.red { background-color: var(--danger); }
+
+/* --- Mobile (<= 768px): stacked card-tables, full-width inline forms,
+   horizontally scrollable nav --- */
+@media (max-width: 768px) {
+    table.data-table { display: block; }
+    table.data-table thead { display: none; }
+    table.data-table tbody, table.data-table tr, table.data-table td { display: block; width: 100%; }
+    table.data-table tr { margin-bottom: 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.5rem; }
+    table.data-table td { display: flex; justify-content: space-between; align-items: center; border: none; padding: 0.5rem; border-bottom: 1px dashed var(--line); text-align: right; }
+    table.data-table td:last-child { border-bottom: none; }
+    table.data-table td::before { content: attr(data-label); font-weight: 600; color: var(--ink-soft); margin-right: auto; text-align: left; }
+
+    .inline-form { flex-direction: column; width: 100%; align-items: flex-end; }
+    .inline-form input, .inline-form select { width: 100%; max-width: none; margin-bottom: 0.5rem; }
+
+    .topbar nav { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; padding-bottom: 5px; scrollbar-width: none; }
+    .topbar nav::-webkit-scrollbar { display: none; }
+}

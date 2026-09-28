@@ -8,6 +8,7 @@
     stays on this device.</p>
 
     <form method="POST">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <div class="field">
             <label for="password">Password</label>
             <input type="password" id="password" name="password" required autofocus

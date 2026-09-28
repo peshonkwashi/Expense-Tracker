@@ -23,6 +23,15 @@ SESSION_TIMEOUT_MINUTES = 10
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {'.csv'}
 
+# --- Receipt OCR (scan-receipt feature) -----------------------------------
+# Image/PDF types accepted for a receipt scan. Falls back to the mock if the
+# real OCR stack (Tesseract, poppler) is unavailable.
+ALLOWED_RECEIPT_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp',
+                              '.tiff', '.heic', '.pdf'}
+# Path to the Tesseract binary when it is not on PATH (common on Windows, e.g.
+# 'C:/Program Files/Tesseract-OCR/tesseract.exe'). Environment overrides this.
+TESSERACT_CMD = os.environ.get('TESSERACT_CMD')
+
 # --- Ingestion validation (FR-01) -----------------------------------------
 # Sanity bounds on individual rows. A statement with a typo'd year or a
 # reference number that landed in the amount column must be rejected per-row,

@@ -51,7 +51,7 @@
     {% endif %}
 
     <div class="table-wrap">
-        <table>
+        <table class="data-table">
             <thead>
                 <tr>
                     <th>Category</th>
@@ -65,12 +65,12 @@
             <tbody>
                 {% for line in report.lines %}
                 <tr>
-                    <td>{{ line.category }}</td>
-                    <td>{% if line.type %}<span class="badge {{ line.type|lower }}">{{ line.type|capitalize }}</span>{% endif %}</td>
-                    <td class="num">{{ line.actual|money }}</td>
-                    <td class="num">{% if line.recommended is not none %}{{ line.recommended|money }}{% else %}—{% endif %}</td>
-                    <td class="num">{% if line.variance is not none %}{{ line.variance|money }}{% else %}—{% endif %}</td>
-                    <td>
+                    <td data-label="Category">{{ line.category }}</td>
+                    <td data-label="Type">{% if line.type %}<span class="badge {{ line.type|lower }}">{{ line.type|capitalize }}</span>{% endif %}</td>
+                    <td data-label="Actual" class="num">{{ line.actual|money }}</td>
+                    <td data-label="Budgeted" class="num">{% if line.recommended is not none %}{{ line.recommended|money }}{% else %}—{% endif %}</td>
+                    <td data-label="Variance" class="num">{% if line.variance is not none %}{{ line.variance|money }}{% else %}—{% endif %}</td>
+                    <td data-label="Result">
                         {% if line.status == 'over' %}<span class="badge over">over by {{ (0 - line.variance)|money }}</span>
                         {% elif line.status == 'under' %}<span class="badge ok">under by {{ line.variance|money }}</span>
                         {% else %}<span class="badge">no budget set</span>{% endif %}

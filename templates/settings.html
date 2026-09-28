@@ -66,6 +66,7 @@
     (including your corrections), re-applies it to anything still uncategorised,
     re-runs the forecast hold-out test and refreshes subscription detection.</p>
     <form method="POST" action="{{ url_for('retrain') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <button type="submit">Retrain models now</button>
     </form>
 </div>
@@ -84,6 +85,21 @@
         statement cannot alter a query.</li>
     </ul>
     <a class="button" href="{{ url_for('export_database') }}">Download a backup</a>
+</div>
+
+<div class="card">
+    <h2>Custom Categories</h2>
+    <p class="muted">Add a new category to assign your transactions to. Once you label a few transactions with it, the ML model will learn to apply it automatically.</p>
+    <form method="POST" action="{{ url_for('add_category') }}" style="display: flex; gap: 10px; align-items: center;">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <input type="text" name="category_name" placeholder="Category Name (e.g. Pet Care)" required>
+        <select name="category_type" required>
+            <option value="" disabled selected>Select Type...</option>
+            <option value="ESSENTIAL">Essential (Needs)</option>
+            <option value="DISCRETIONARY">Discretionary (Wants)</option>
+        </select>
+        <button type="submit">Add Category</button>
+    </form>
 </div>
 
 <div class="card">

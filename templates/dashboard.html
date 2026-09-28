@@ -14,7 +14,7 @@
 <div class="notice">
     <strong>Behavioural learning phase in progress</strong>
     <p style="margin:.4rem 0 .6rem;">{{ learning.message }}</p>
-    <div class="bar"><span style="width: {{ learning.progress }}%"></span></div>
+    <div class="progress-container"><div class="progress-bar green" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ learning.progress|round(0)|int }}" aria-label="Learning phase progress" style="width: {{ [learning.progress, 100]|min }}%"></div></div>
     <p class="muted" style="margin:.4rem 0 0;">
         {{ learning.progress }}% complete —
         {{ learning.days_observed }}/{{ learning.days_required }} days,
@@ -71,11 +71,23 @@
     <div class="card">
         <h2>Budget vs actual</h2>
         {% if budget %}
-            <div class="chart-box"><canvas id="budgetChart"></canvas></div>
-            <script type="application/json" id="budget-chart-data">{{ chart|tojson }}</script>
+            <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 1rem;">
+            {% for row in budget.rows[:6] %}
+                {% set percentage = (row.spent / row.recommended * 100) if row.recommended > 0 else 0 %}
+                {% set color_class = 'green' if percentage < 75 else ('yellow' if percentage < 95 else 'red') %}
+                <div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.9rem; margin-bottom: 0.3rem;">
+                        <strong>{{ row.category }}</strong>
+                        <span>{{ row.spent|money }} / {{ row.recommended|money }} {{ currency }}</span>
+                    </div>
+                    <div class="progress-container">
+                        <div class="progress-bar {{ color_class }}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ percentage|round(0)|int }}" aria-label="{{ row.category }} spent versus budget" style="width: {{ percentage if percentage <= 100 else 100 }}%;"></div>
+                    </div>
+                </div>
+            {% endfor %}
+            </div>
         {% else %}
-            <p class="empty">Your budget chart appears once the learning phase
-            completes.</p>
+            <p class="empty">Your budget charts appear once the learning phase completes.</p>
         {% endif %}
     </div>
 
@@ -141,8 +153,9 @@
                     <strong>{{ goal.goal_name }}</strong>
                     <span class="muted">{{ goal.saved|money }} / {{ goal.target_amount|money }} {{ currency }}</span>
                 </div>
-                <div class="bar {% if goal.progress < 40 %}warning{% endif %}">
-                    <span style="width: {{ goal.progress }}%"></span>
+                <div class="progress-container" style="margin:.3rem 0;">
+                    {% set color_class = 'red' if goal.progress < 40 else ('yellow' if goal.progress < 80 else 'green') %}
+                    <div class="progress-bar {{ color_class }}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ goal.progress|round(0)|int }}" aria-label="{{ goal.goal_name }} progress" style="width: {{ [goal.progress, 100]|min }}%"></div>
                 </div>
                 <span class="muted">{{ goal.progress }}% — due {{ goal.target_date }}</span>
             </div>
@@ -166,7 +179,7 @@
     <strong>{{ subscriptions.monthly_total|money }} {{ currency }}</strong> a month
     ({{ subscriptions.annual_total|money }} a year).</p>
     <div class="table-wrap">
-        <table>
+        <table class="data-table">
             <thead>
                 <tr>
                     <th>Charge</th>
@@ -179,11 +192,11 @@
             <tbody>
                 {% for item in subscriptions.entries %}
                 <tr>
-                    <td>{{ item.label }}</td>
-                    <td class="num">{{ item.monthly_amount|money }}</td>
-                    <td class="num">{{ item.occurrences }}</td>
-                    <td>{{ item.last_seen }}</td>
-                    <td class="num">{{ item.annualised|money }}</td>
+                    <td data-label="Charge">{{ item.label }}</td>
+                    <td data-label="Monthly" class="num">{{ item.monthly_amount|money }}</td>
+                    <td data-label="Times seen" class="num">{{ item.occurrences }}</td>
+                    <td data-label="Last charged">{{ item.last_seen }}</td>
+                    <td data-label="Yearly cost" class="num">{{ item.annualised|money }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

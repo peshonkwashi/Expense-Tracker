@@ -104,5 +104,50 @@ class ScanReceiptTests(unittest.TestCase):
         self.assertEqual(_total(items), ocr.DEFAULT_TARGET)
 
 
+class ReceiptTextParsingTests(unittest.TestCase):
+    """Real-OCR text parsing (no Tesseract binary needed)."""
+
+    def test_extracts_named_items_with_prices(self):
+        items = ocr.parse_receipt_text('Bread 700g 25.00\nFresh Milk 2L 40.00')
+        self.assertEqual([(i['name'], i['price']) for i in items],
+                         [('Bread 700g', 25.00), ('Fresh Milk 2L', 40.00)])
+
+    def test_total_tax_and_payment_lines_are_not_items(self):
+        text = ('Bread 25.00\nMilk 40.00\nSUBTOTAL 65.00\nVAT 10.40\n'
+                'TOTAL 75.40\nCASH 100.00\nCHANGE 24.60')
+        names = {i['name'] for i in ocr.parse_receipt_text(text)}
+        self.assertEqual(names, {'Bread', 'Milk'})
+
+    def test_takes_the_last_price_as_the_line_total(self):
+        # "2 @ 12.50" unit price then the 25.00 line total: keep the total.
+        items = ocr.parse_receipt_text('Eggs 2 12.50 25.00')
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['price'], 25.00)
+
+    def test_thousands_separator_is_handled(self):
+        items = ocr.parse_receipt_text('Sofa Set 1,250.00')
+        self.assertEqual(items[0]['price'], 1250.00)
+
+    def test_lines_without_a_price_are_ignored(self):
+        text = 'SHOPRITE MANDA HILL\nTel: 0211 123456\n2026-09-28\nBread 25.00'
+        items = ocr.parse_receipt_text(text)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['name'], 'Bread')
+
+    def test_implausible_prices_are_dropped(self):
+        # A misread barcode/total in the millions is not a real line price.
+        self.assertEqual(ocr.parse_receipt_text('Item 9999999.00'), [])
+
+    def test_empty_text_returns_no_items(self):
+        self.assertEqual(ocr.parse_receipt_text(''), [])
+
+    def test_scan_receipt_falls_back_to_mock_when_ocr_unavailable(self):
+        # No real image on disk -> real OCR is skipped, mock is used and its
+        # prices reconcile to the transaction total.
+        items = ocr.scan_receipt('does-not-exist.jpg', target_amount=180.0,
+                                  description='Link Pharmacy')
+        self.assertEqual(round(sum(i['price'] for i in items), 2), 180.0)
+
+
 if __name__ == '__main__':
     unittest.main()

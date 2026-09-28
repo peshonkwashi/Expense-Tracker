@@ -1,0 +1,15 @@
+# Optional dependencies for the receipt-scanning feature (real OCR).
+# The app runs fine without these — scan-receipt falls back to a scenario mock.
+#
+#   pip install -r requirements-ocr.txt
+#
+# Two SYSTEM binaries are also required and are NOT installable via pip:
+#   * Tesseract OCR — the OCR engine (apt: tesseract-ocr; Windows: the UB-Mannheim
+#     installer). If not on PATH, set the TESSERACT_CMD environment variable.
+#   * poppler — only needed to read PDF receipts (apt: poppler-utils; Windows:
+#     the poppler release binaries on PATH).
+
+pytesseract==0.3.13    # Python wrapper around the Tesseract binary
+pillow==12.3.0         # image loading and preprocessing
+pillow-heif==1.8.0     # lets Pillow open iPhone .heic photos
+pdf2image==1.17.0      # rasterises PDF receipts (needs poppler)

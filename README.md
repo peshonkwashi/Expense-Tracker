@@ -213,6 +213,12 @@ labels and weighted more heavily during training.
   filters on it, but the UI assumes one profile per database file.
 - **Password recovery does not exist.** By design — there is no server to
   recover from. The Settings screen offers a database backup instead.
+- **Receipt OCR is optional and degrades gracefully.** Scanning a receipt uses
+  Tesseract (`requirements-ocr.txt`, plus the Tesseract binary and poppler for
+  PDFs). When any of that is missing, or OCR reads nothing usable, the feature
+  falls back to a scenario-based mock so it always returns something. If
+  Tesseract is installed but not on PATH (common on Windows), set the
+  `TESSERACT_CMD` environment variable to the binary's path.
 
 ---
 

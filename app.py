@@ -19,10 +19,14 @@ from database import get_db_connection, init_db
 from ml import categorization, forecasting, subscriptions
 from services import behavioural, ingestion, recommendation
 
+from flask_wtf.csrf import CSRFProtect
+
 app = Flask(__name__)
 app.secret_key = security.load_or_create_secret_key()
 app.config['UPLOAD_FOLDER'] = config.UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = config.MAX_UPLOAD_BYTES
+
+csrf = CSRFProtect(app)
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(
     minutes=config.SESSION_TIMEOUT_MINUTES)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -212,6 +216,66 @@ def dashboard():
 
 # --- Transactions ----------------------------------------------------------
 
+@app.route('/transactions/export', methods=['GET'])
+@security.login_required
+def export_transactions():
+    """Export transactions to CSV (filtered by current selections)."""
+    import csv
+    from io import StringIO
+    from flask import Response
+    
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        
+        selected_category = request.args.get('category', '')
+        selected_month = request.args.get('month', '')
+        
+        query = (
+            "SELECT t.transaction_date, t.description, t.amount, t.transaction_type, "
+            "c.category_name, t.is_subscription "
+            "FROM Transaction_Record t "
+            "LEFT JOIN Category c ON t.category_id = c.category_id "
+            "WHERE t.user_id = ?"
+        )
+        params = [user['user_id']]
+        
+        if selected_category:
+            query += ' AND c.category_name = ?'
+            params.append(selected_category)
+        if selected_month:
+            query += " AND strftime('%Y-%m', t.transaction_date) = ?"
+            params.append(selected_month)
+            
+        query += ' ORDER BY t.transaction_date DESC, t.transaction_id DESC'
+        
+        rows = conn.execute(query, params).fetchall()
+        
+        si = StringIO()
+        cw = csv.writer(si)
+        cw.writerow(['Date', 'Description', 'Amount', 'Type', 'Category', 'Is Subscription'])
+        for r in rows:
+            cw.writerow([r['transaction_date'], r['description'], f"{r['amount']:.2f}", 
+                         r['transaction_type'], r['category_name'], 
+                         'Yes' if r['is_subscription'] else 'No'])
+                         
+        output = si.getvalue()
+        
+        filename = "transactions"
+        if selected_month:
+            filename += f"_{selected_month}"
+        if selected_category:
+            filename += f"_{selected_category}"
+        filename += ".csv"
+        
+        return Response(
+            output,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment;filename={filename}"}
+        )
+    finally:
+        conn.close()
+
 @app.route('/transactions', methods=('GET', 'POST'))
 @security.login_required
 def transactions():
@@ -238,13 +302,26 @@ def transactions():
         if selected_month:
             query += " AND strftime('%Y-%m', t.transaction_date) = ?"
             params.append(selected_month)
-        query += ' ORDER BY t.transaction_date DESC, t.transaction_id DESC LIMIT 500'
+            
+        # Get total count for pagination
+        count_query = query.replace('SELECT t.*, c.category_name, c.category_type', 'SELECT COUNT(*)')
+        total_transactions = conn.execute(count_query, params).fetchone()[0]
+        
+        # Pagination params
+        page = request.args.get('page', 1, type=int)
+        per_page = 50
+        offset = (page - 1) * per_page
+        
+        query += ' ORDER BY t.transaction_date DESC, t.transaction_id DESC LIMIT ? OFFSET ?'
+        params.extend([per_page, offset])
 
         # Ensure subscriptions are tagged so we can hide OCR scanner on them
         from ml import subscriptions
         subscriptions.detect_subscriptions(conn, user['user_id'], persist=True)
 
         rows = conn.execute(query, params).fetchall()
+        
+        total_pages = (total_transactions + per_page - 1) // per_page
         
         # Load items for transactions
         items_by_txn = {}
@@ -263,8 +340,10 @@ def transactions():
         return render_template('transactions.html', transactions=rows,
                                categories=categories, months=months,
                                selected_category=selected_category,
-                               selected_month=selected_month, metric=metric,
-                               target_f1=config.TARGET_F1, items_by_txn=items_by_txn)
+                               selected_month=selected_month,
+                               metric=metric, target_f1=config.TARGET_F1,
+                               items_by_txn=items_by_txn,
+                               page=page, total_pages=total_pages)
     finally:
         conn.close()
 
@@ -391,27 +470,59 @@ def clear_receipt(transaction_id):
 @app.route('/transactions/<int:transaction_id>/receipt', methods=('POST',))
 @security.login_required
 def upload_receipt(transaction_id):
-    conn = database.get_db_connection()
-    user = database.get_user(conn)
-    
-    # Mock file handling since it's just a UI demo
-    # We would save request.files['receipt'] and pass it to OCR
-    txn = conn.execute('SELECT t.*, c.category_name FROM Transaction_Record t LEFT JOIN Category c ON t.category_id = c.category_id WHERE transaction_id = ? AND user_id = ?', 
-                       (transaction_id, user['user_id'])).fetchone()
-    
-    if txn:
-        from services.ocr import scan_receipt
-        items = scan_receipt('dummy_path.jpg', target_amount=float(txn['amount']), category=txn['category_name'], description=txn['description'])
-        
-        # Insert items
-        for item in items:
-            conn.execute('INSERT INTO Receipt_Item (transaction_id, item_name, amount, quantity) VALUES (?, ?, ?, ?)',
-                         (transaction_id, item['name'], item['price'], item['quantity']))
-        conn.commit()
-        flash('Receipt scanned successfully!')
-        
-    conn.close()
-    return redirect(url_for('transactions'))
+    """Scan an uploaded receipt into itemised lines (scan-receipt feature)."""
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        txn = conn.execute(
+            'SELECT t.*, c.category_name FROM Transaction_Record t '
+            'LEFT JOIN Category c ON t.category_id = c.category_id '
+            'WHERE t.transaction_id = ? AND t.user_id = ?',
+            (transaction_id, user['user_id'])).fetchone()
+        if not txn:
+            abort(404)
+
+        file = request.files.get('receipt')
+        if file is None or not file.filename:
+            flash('No receipt file was selected.', 'error')
+            return redirect(url_for('transactions'))
+
+        filename = secure_filename(file.filename)
+        extension = os.path.splitext(filename)[1].lower()
+        if extension not in config.ALLOWED_RECEIPT_EXTENSIONS:
+            flash('Receipts must be an image (JPG, PNG, HEIC) or a PDF.', 'error')
+            return redirect(url_for('transactions'))
+
+        os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
+        stamped = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{filename}"
+        upload_path = os.path.join(config.UPLOAD_FOLDER, stamped)
+        file.save(upload_path)
+
+        try:
+            from services.ocr import scan_receipt
+            items = scan_receipt(upload_path, target_amount=float(txn['amount']),
+                                 category=txn['category_name'],
+                                 description=txn['description'])
+            if items:
+                for item in items:
+                    conn.execute(
+                        'INSERT INTO Receipt_Item (transaction_id, item_name, '
+                        'amount, quantity) VALUES (?, ?, ?, ?)',
+                        (transaction_id, item['name'], item['price'],
+                         item['quantity']))
+                conn.commit()
+                flash(f'Receipt scanned — {len(items)} item(s) extracted.',
+                      'success')
+            else:
+                flash('No items could be read from that receipt.', 'warning')
+        finally:
+            try:
+                os.remove(upload_path)
+            except OSError:
+                pass
+        return redirect(url_for('transactions'))
+    finally:
+        conn.close()
 
 @app.route('/budget')
 @security.login_required
@@ -565,6 +676,33 @@ def retrain():
     finally:
         conn.close()
 
+
+@app.route('/settings/categories/add', methods=('POST',))
+@security.login_required
+def add_category():
+    """Add a user-defined spending category (for manual assignment)."""
+    import sqlite3
+    category_name = request.form.get('category_name', '').strip().title()
+    category_type = request.form.get('category_type', '')
+
+    if not category_name or len(category_name) > 40 or \
+            category_type not in ('ESSENTIAL', 'DISCRETIONARY'):
+        flash('Enter a category name (up to 40 characters) and choose a type.',
+              'error')
+        return redirect(url_for('settings'))
+
+    conn = get_db_connection()
+    try:
+        conn.execute('INSERT INTO Category (category_name, category_type) '
+                     'VALUES (?, ?)', (category_name, category_type))
+        conn.commit()
+        flash(f"Category '{category_name}' added.", 'success')
+    except sqlite3.IntegrityError:
+        # The only expected failure: the UNIQUE constraint on category_name.
+        flash(f"Category '{category_name}' already exists.", 'warning')
+    finally:
+        conn.close()
+    return redirect(url_for('settings'))
 
 @app.route('/settings/export')
 @security.login_required

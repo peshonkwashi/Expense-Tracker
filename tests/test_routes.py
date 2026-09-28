@@ -36,6 +36,9 @@ class RouteTestCase(unittest.TestCase):
         import app as app_module
         self.app_module = app_module
         app_module.app.config['TESTING'] = True
+        # CSRF protection is enforced in production but disabled here so the
+        # route tests can POST without a token, which is standard practice.
+        app_module.app.config['WTF_CSRF_ENABLED'] = False
         self.client = app_module.app.test_client()
 
     def tearDown(self):

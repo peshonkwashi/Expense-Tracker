@@ -145,11 +145,10 @@
     document.addEventListener('DOMContentLoaded', function () {
         var currency = document.body.getAttribute('data-currency') || '';
 
-        buildBar('budgetChart', 'budget-chart-data', [
-            { key: 'recommended', label: 'Recommended budget', role: 'budget' },
-            { key: 'spent', label: 'Spent so far', role: 'actual' }
-        ], { currency: currency });
-
+        // The dashboard budget view is now CSS progress bars, not a chart; only
+        // the salary-cycle chart remains. buildBar still no-ops safely if a
+        // canvas is absent, but there is no reason to call it for a chart that
+        // was removed.
         buildBar('cycleChart', 'cycle-chart-data', [
             { key: 'values', label: 'Spending', role: 'budget' }
         ], { currency: currency });

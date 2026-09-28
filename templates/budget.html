@@ -10,7 +10,7 @@ figure below can be traced back to the data it came from.</p>
 <div class="notice">
     <strong>Not ready yet</strong>
     <p style="margin:.4rem 0 .6rem;">{{ learning.message }}</p>
-    <div class="bar"><span style="width: {{ learning.progress }}%"></span></div>
+    <div class="progress-container"><div class="progress-bar green" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ learning.progress|round(0)|int }}" aria-label="Learning phase progress" style="width: {{ [learning.progress, 100]|min }}%"></div></div>
     <p class="muted" style="margin:.5rem 0 0;">The system observes for one full
     salary cycle before recommending anything. A budget built on a fortnight of
     data would just be a guess wearing a chart.</p>
@@ -57,7 +57,7 @@ figure below can be traced back to the data it came from.</p>
 <div class="card">
     <h2>Category allocations</h2>
     <div class="table-wrap">
-        <table>
+        <table class="data-table">
             <thead>
                 <tr>
                     <th>Category</th>
@@ -72,7 +72,7 @@ figure below can be traced back to the data it came from.</p>
             <tbody>
                 {% for row in budget.rows %}
                 <tr>
-                    <td>
+                    <td data-label="Category">
                         <strong>{{ row.category }}</strong>
                         <details class="explain">
                             <summary>How was this worked out?</summary>
@@ -81,19 +81,20 @@ figure below can be traced back to the data it came from.</p>
                             = {{ row.history[loop.index0]|money }}{% if not loop.last %}; {% endif %}{% endfor %}</p>
                         </details>
                     </td>
-                    <td><span class="badge {{ row.type|lower }}">{{ row.type|capitalize }}</span></td>
-                    <td class="num">{{ row.forecast|money }}</td>
-                    <td class="num"><strong>{{ row.recommended|money }}</strong></td>
-                    <td class="num">{{ row.pct_of_salary }}%</td>
-                    <td class="num">{{ row.spent|money }}</td>
-                    <td>
+                    <td data-label="Type"><span class="badge {{ row.type|lower }}">{{ row.type|capitalize }}</span></td>
+                    <td data-label="Forecast" class="num">{{ row.forecast|money }}</td>
+                    <td data-label="Recommended" class="num"><strong>{{ row.recommended|money }}</strong></td>
+                    <td data-label="% of salary" class="num">{{ row.pct_of_salary }}%</td>
+                    <td data-label="Spent so far" class="num">{{ row.spent|money }}</td>
+                    <td data-label="Status">
                         <span class="badge {{ row.status }}">
                             {% if row.status == 'over' %}over budget
                             {% elif row.status == 'warning' %}{{ row.used_pct|round(0)|int }}% used
                             {% else %}on track{% endif %}
                         </span>
-                        <div class="bar {{ row.status if row.status != 'ok' else '' }}">
-                            <span style="width: {{ [row.used_pct, 100]|min }}%"></span>
+                        <div class="progress-container">
+                            {% set color_class = 'green' if row.used_pct < 75 else ('yellow' if row.used_pct < 95 else 'red') %}
+                            <div class="progress-bar {{ color_class }}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ row.used_pct|round(0)|int }}" aria-label="{{ row.category }} budget used" style="width: {{ [row.used_pct, 100]|min }}%"></div>
                         </div>
                     </td>
                 </tr>

@@ -27,6 +27,7 @@ need to put aside each month to get there.</p>
 <div class="card">
     <h2>Add a goal</h2>
     <form method="POST">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <div class="grid three">
             <div class="field">
                 <label for="goal_name">What are you saving for?</label>
@@ -63,8 +64,9 @@ goals in due-date order — the goal due soonest is funded first.</p>
             {% else %}<span class="badge warning">behind</span>{% endif %}
         </div>
 
-        <div class="bar {% if goal.progress < 40 %}warning{% endif %}" style="margin:.75rem 0 .35rem;">
-            <span style="width: {{ goal.progress }}%"></span>
+        <div class="progress-container" style="margin:.75rem 0 .35rem;">
+            {% set color_class = 'red' if goal.progress < 40 else ('yellow' if goal.progress < 80 else 'green') %}
+            <div class="progress-bar {{ color_class }}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ goal.progress|round(0)|int }}" aria-label="{{ goal.goal_name }} progress" style="width: {{ [goal.progress, 100]|min }}%"></div>
         </div>
         <p class="muted" style="margin:0 0 .75rem;">
             {{ goal.saved|money }} of {{ goal.target_amount|money }} {{ currency }}
@@ -92,6 +94,7 @@ goals in due-date order — the goal due soonest is funded first.</p>
         <form method="POST" action="{{ url_for('delete_goal', goal_id=goal.goal_id) }}"
               style="margin-top:.75rem;"
               onsubmit="return confirm('Remove the goal &quot;{{ goal.goal_name }}&quot;?');">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <button type="submit" class="secondary small">Remove</button>
         </form>
     </div>

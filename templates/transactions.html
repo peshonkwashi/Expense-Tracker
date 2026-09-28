@@ -10,6 +10,7 @@ correction.</p>
 <div class="card">
     <h2>Upload a bank statement</h2>
     <form method="POST" enctype="multipart/form-data" class="split">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <div style="flex:1;min-width:260px;">
             <input type="file" name="file" accept=".csv" required>
             <p class="hint">CSV only, up to 5MB. Your file needs a date column, a
@@ -73,13 +74,14 @@ correction.</p>
             {% if selected_category or selected_month %}
             <a class="button secondary small" href="{{ url_for('transactions') }}">Clear</a>
             {% endif %}
+            <a class="button secondary small" href="{{ url_for('export_transactions', category=selected_category, month=selected_month) }}">Export CSV</a>
         </div>
         <span class="muted">{{ transactions|length }} shown</span>
     </form>
 
     {% if transactions %}
     <div class="table-wrap">
-        <table>
+        <table class="data-table">
             <thead>
                 <tr>
                     <th>Date</th>
@@ -94,20 +96,20 @@ correction.</p>
             <tbody>
                 {% for txn in transactions %}
                 <tr>
-                    <td>{{ txn['transaction_date'] }}</td>
-                    <td>
+                    <td data-label="Date">{{ txn['transaction_date'] }}</td>
+                    <td data-label="Description">
                         {{ txn['description'] }}
                         {% if txn['is_subscription'] %}<span class="badge sub" title="Recurring charge">recurring</span>{% endif %}
                         {% if txn['is_salary'] %}<span class="badge essential">salary</span>{% endif %}
                     </td>
-                    <td class="num">{{ txn['amount']|money }}</td>
-                    <td>{{ txn['transaction_type']|capitalize }}</td>
-                    <td>
+                    <td data-label="Amount" class="num">{{ txn['amount']|money }}</td>
+                    <td data-label="Type">{{ txn['transaction_type']|capitalize }}</td>
+                    <td data-label="Category">
                         <span class="badge {{ 'essential' if txn['category_type'] == 'ESSENTIAL' else 'discretionary' }}">
                             {{ txn['category_name'] or 'Uncategorised' }}
                         </span>
                     </td>
-                    <td>
+                    <td data-label="Assigned by">
                         <span class="muted">
                         {% if txn['category_source'] == 'user' %}you
                         {% elif txn['category_source'] == 'model' %}model{% if txn['category_confidence'] %} ({{ (txn['category_confidence'] * 100)|round(0)|int }}%){% endif %}
@@ -115,10 +117,11 @@ correction.</p>
                         {% else %}—{% endif %}
                         </span>
                     </td>
-                    <td class="no-print">
+                    <td data-label="Action" class="no-print">
                         <div style="display: flex; gap: 5px; flex-direction: column;">
                             <form class="inline-form" method="POST"
                                   action="{{ url_for('recategorise', transaction_id=txn['transaction_id']) }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                                 <select name="category_name" class="small">
                                     {% for category in categories %}
                                     <option value="{{ category['category_name'] }}"
@@ -133,8 +136,9 @@ correction.</p>
                                 {% if txn['transaction_id'] not in items_by_txn and txn['is_subscription'] != 1 %}
                                 <form class="inline-form" method="POST"
                                       action="{{ url_for('upload_receipt', transaction_id=txn['transaction_id']) }}" enctype="multipart/form-data">
-                                    <input type="file" name="receipt" accept="image/*" class="small" style="max-width: 150px;">
-                                    <button type="submit" class="secondary small" title="Mock OCR: Extracts items to match total">Scan Receipt</button>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                    <input type="file" name="receipt" accept="image/*, .pdf, .heic" class="small receipt-input">
+                                    <button type="submit" class="secondary small" title="Extract line items from receipt">Scan Receipt</button>
                                 </form>
                                 {% endif %}
                             {% endif %}
@@ -148,6 +152,7 @@ correction.</p>
                             <div style="display: flex; justify-content: space-between; align-items: center;">
                                 <strong>🧾 Itemized Receipt (OCR Extracted):</strong>
                                 <form method="POST" action="{{ url_for('clear_receipt', transaction_id=txn['transaction_id']) }}" style="margin: 0;">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                                     <button type="submit" class="secondary small" style="background: transparent; border: 1px solid #ccc; color: #666;">Clear Receipt</button>
                                 </form>
                             </div>
@@ -163,6 +168,24 @@ correction.</p>
                 {% endfor %}
             </tbody>
         </table>
+        
+        {% if total_pages > 1 %}
+        <div style="display: flex; justify-content: center; gap: 10px; margin-top: 1rem;" class="no-print">
+            {% if page > 1 %}
+            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, page=page-1) }}" class="button small secondary">&laquo; Previous</a>
+            {% else %}
+            <button class="small secondary" disabled>&laquo; Previous</button>
+            {% endif %}
+            
+            <span style="display: flex; align-items: center;">Page {{ page }} of {{ total_pages }}</span>
+            
+            {% if page < total_pages %}
+            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, page=page+1) }}" class="button small secondary">Next &raquo;</a>
+            {% else %}
+            <button class="small secondary" disabled>Next &raquo;</button>
+            {% endif %}
+        </div>
+        {% endif %}
     </div>
     {% else %}
         <p class="empty">No transactions yet. Upload a statement above to get started.</p>

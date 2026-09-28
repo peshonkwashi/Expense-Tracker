@@ -8,6 +8,7 @@
     amount and pay date anchor everything the system learns about your spending.</p>
 
     <form method="POST">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <div class="field">
             <label for="full_name">Your name</label>
             <input type="text" id="full_name" name="full_name" required
