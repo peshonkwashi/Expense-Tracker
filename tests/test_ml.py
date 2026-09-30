@@ -405,6 +405,24 @@ class ForecastingTests(unittest.TestCase):
         self.assertEqual(method, 'mean')
         self.assertIsNone(error)
 
+    def test_selection_prefers_linear_on_a_trending_series(self):
+        # A steady climb is exactly what least-squares extrapolation is for; a
+        # flat average sits below the still-rising latest month and a stationary
+        # AR(1) reverts towards the mean, so both trail a linear fit.
+        method, error = forecasting.select_method(
+            [500, 600, 700, 800, 900, 1000, 1100])
+        self.assertEqual(method, 'linear')
+        self.assertLess(error, 50)
+
+    def test_intermittent_estimator_handles_sporadic_spending(self):
+        # Spent every third month: the per-month expectation is 900 / 3 = 300,
+        # well below the lump and above the zero months a mean would predict.
+        prediction = forecasting._predict_intermittent(
+            [0, 0, 900, 0, 0, 900, 0, 0, 900])
+        self.assertGreater(prediction, 0)
+        self.assertLess(prediction, 900)
+        self.assertAlmostEqual(prediction, 300.0, delta=50)
+
     def test_forecasts_are_never_negative(self):
         with temp_database() as (conn, user_id):
             self._seed_months(conn, user_id, 'Groceries', [2000, 1500, 1000, 500, 100])
@@ -436,6 +454,23 @@ class ForecastingTests(unittest.TestCase):
             self._seed_months(conn, user_id, 'Groceries', [1000])
             evaluation = forecasting.backtest(conn, user_id, today=date(2026, 3, 1))
             self.assertFalse(evaluation['evaluated'])
+
+    def test_backtest_headline_is_the_monthly_total(self):
+        # NFR-03 is measured on the monthly total (per-category over/under-shoots
+        # net out); the per-category error is kept as a stricter diagnostic.
+        with temp_database() as (conn, user_id):
+            self._seed_months(conn, user_id, 'Groceries',
+                              [1000, 1000, 1000, 1000, 1000])
+            self._seed_months(conn, user_id, 'Transport',
+                              [400, 400, 400, 400, 400])
+            evaluation = forecasting.backtest(conn, user_id, today=date(2026, 7, 1))
+            self.assertTrue(evaluation['evaluated'], evaluation['reason'])
+            # Headline mae_ratio is the total-level error, not per-category.
+            expected = (abs(evaluation['predicted_total'] - evaluation['actual_total'])
+                        / evaluation['actual_total'])
+            self.assertAlmostEqual(evaluation['mae_ratio'], round(expected, 4), places=4)
+            self.assertIsNotNone(evaluation['per_category_mae_ratio'])
+            self.assertTrue(evaluation['meets_target'])
 
 
 if __name__ == '__main__':
