@@ -203,13 +203,24 @@ def build_budget(conn, user, today=None, month_key=None):
     # rent is lower than it is would be a fiction. The system reports the
     # deficit instead and raises it as a critical alert.
     essentials_exceed_income = essential_total > salary
-    recommended_savings = savings_reserved + max(0.0, surplus)
+    
+    # Reevaluate recommended monthly savings based on actual expenses (more or less spent)
+    # 1. Calculate how much more they still need to spend to fulfill the rest of their budget
+    remaining_budget = sum(max(0.0, r['recommended'] - r['spent']) for r in essentials + discretionary)
+    
+    # 2. What will be left at the end of the month assuming they finish out the budget?
+    # If they overspent a category, true_spent_total goes up, eating into this balance.
+    # If the month is ending and they underspent, remaining_budget drops to 0, leaving more balance.
+    projected_balance = salary - true_spent_total - remaining_budget
+    
+    recommended_savings = max(0.0, projected_balance)
 
     # With no goals set, still steer a floor of income into savings so the
     # surplus is not silently treated as spendable.
     savings_floor = salary * config.DEFAULT_SAVINGS_RATE
     if not goals and recommended_savings < savings_floor:
-        recommended_savings = min(savings_floor, max(0.0, salary - allocated))
+        # Only enforce the floor if they actually have the money left!
+        recommended_savings = max(0.0, min(savings_floor, projected_balance))
 
     rows = sorted(essentials + discretionary,
                   key=lambda item: item['recommended'], reverse=True)
@@ -335,6 +346,33 @@ def generate_nudges(budget, cycle, subscriptions_summary):
                 f"{budget['scale'] * 100:.0f}% of what you normally spend to "
                 f"keep the month solvent."),
             'why': 'Needs-based allocation, section 2.2 of the project report.',
+        })
+
+    # Proactive savings alert: fires when the month's projected leftover has
+    # slipped below what the user's active goals need this month. Because
+    # build_budget already trims discretionary spending to reserve the goal
+    # commitment, this can only drop below the commitment once *actual*
+    # overspending eats into it — so the alert is a genuine early warning rather
+    # than a restatement of the plan, and it stays silent when there are no goals
+    # (goal_total is 0) or when saving is still on track. Loss-framed, like the
+    # rest of these nudges.
+    if budget.get('recommended_savings', 0) < budget.get('goal_total', 0):
+        shortfall = budget['goal_total'] - budget['recommended_savings']
+        nudges.append({
+            'severity': 'critical',
+            'category': 'Savings',
+            'title': 'Your savings goals are slipping this month',
+            'message': (
+                f"At your current pace you are on track to save "
+                f"{budget['recommended_savings']:.2f} {config.CURRENCY} this month "
+                f"— {shortfall:.2f} {config.CURRENCY} less than your active goals "
+                f"need to stay on schedule. Trimming discretionary spending now is "
+                f"what protects those goals; leave it and the shortfall comes out "
+                f"of your target dates."
+            ),
+            'why': 'Your projected end-of-month cash (salary minus what you have '
+                   'spent so far and the rest of your budget) has fallen below the '
+                   'monthly contribution your active goals require.',
         })
 
     if subscriptions_summary and subscriptions_summary['count']:

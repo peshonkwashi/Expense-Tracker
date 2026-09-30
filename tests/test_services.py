@@ -265,6 +265,28 @@ class NudgeTests(unittest.TestCase):
         self.assertEqual(nudges[0]['severity'], 'critical')
         self.assertEqual(nudges[-1]['severity'], 'info')
 
+    def test_savings_alert_fires_when_projection_falls_short(self):
+        # Spending has pushed projected savings below what the goals need.
+        budget = self._budget(500.0)  # under threshold: no per-category nudge
+        budget['goal_total'] = 2000.0
+        budget['recommended_savings'] = 1200.0
+        nudges = recommendation.generate_nudges(budget, None, None)
+        savings = [n for n in nudges if n['category'] == 'Savings']
+        self.assertEqual(len(savings), 1)
+        self.assertEqual(savings[0]['severity'], 'critical')
+
+    def test_savings_alert_is_silent_when_on_track(self):
+        budget = self._budget(500.0)
+        budget['goal_total'] = 2000.0
+        budget['recommended_savings'] = 2500.0
+        nudges = recommendation.generate_nudges(budget, None, None)
+        self.assertFalse([n for n in nudges if n['category'] == 'Savings'])
+
+    def test_savings_alert_is_silent_when_there_are_no_goals(self):
+        # Default fixture has goal_total 0.0 — no goals, so no shortfall alert.
+        nudges = recommendation.generate_nudges(self._budget(500.0), None, None)
+        self.assertFalse([n for n in nudges if n['category'] == 'Savings'])
+
 
 class SavingsTests(unittest.TestCase):
     def test_pool_is_allocated_by_due_date_not_duplicated(self):

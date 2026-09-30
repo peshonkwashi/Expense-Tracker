@@ -126,7 +126,10 @@ figure below can be traced back to the data it came from.</p>
             ({{ budget.discretionary_total|money }} {{ currency }}) is shared
             across your wants.</li>
             <li><strong>Anything left over is savings.</strong> That comes to
-            {{ budget.recommended_savings|money }} {{ currency }} this month.</li>
+            {{ budget.recommended_savings|money }} {{ currency }} this month. This
+            figure is re-projected from what you have actually spent so far, so it
+            falls if you overspend a category and holds steady when you stay on
+            plan — it never recommends saving money the month can no longer spare.</li>
         </ol>
         <p class="muted" style="margin-top:.75rem;">This follows the needs-based
         allocation hierarchy rather than a fixed 50/30/20 split, so it adapts to
@@ -136,10 +139,10 @@ figure below can be traced back to the data it came from.</p>
     <div class="card">
         <h2>Forecast accuracy</h2>
         {% if metric %}
-            <p>Last hold-out evaluation: mean absolute error of
-            <strong>{{ metric['mae']|money }} {{ currency }}</strong> per category
+            <p>Last hold-out evaluation: monthly-total absolute error of
+            <strong>{{ metric['mae']|money }} {{ currency }}</strong>
             {% if metric['mae_ratio'] is not none %}
-                ({{ (metric['mae_ratio'] * 100)|round(1) }}% of average actual spend
+                ({{ (metric['mae_ratio'] * 100)|round(1) }}% of actual monthly spend
                 {% if metric['mae_ratio'] <= max_mae_ratio %}
                     <span class="badge ok">within the {{ (max_mae_ratio * 100)|int }}% target</span>
                 {% else %}
