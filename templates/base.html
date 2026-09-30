@@ -20,6 +20,7 @@
         <a href="{{ url_for('budget') }}" {% if request.endpoint == 'budget' %}class="active"{% endif %}>Budget</a>
         <a href="{{ url_for('savings') }}" {% if request.endpoint == 'savings' %}class="active"{% endif %}>Savings Goals</a>
         <a href="{{ url_for('reports') }}" {% if request.endpoint == 'reports' %}class="active"{% endif %}>Reports</a>
+        {% if demo_features %}<a href="{{ url_for('household') }}" {% if request.endpoint == 'household' %}class="active"{% endif %}>Household</a>{% endif %}
         <a href="{{ url_for('settings') }}" {% if request.endpoint == 'settings' %}class="active"{% endif %}>Settings</a>
         <a href="{{ url_for('logout') }}">Sign out</a>
     </nav>

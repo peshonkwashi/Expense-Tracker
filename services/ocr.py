@@ -27,6 +27,48 @@ FAST_FOOD_MERCHANTS = (
     'chicken inn', 'subway', 'galitos', 'roman', 'ocean basket',
 )
 
+# Merchants that deliver a digital / email receipt, so the (mock) email
+# auto-fetcher can plausibly pull one from an inbox. Physical, cash- or
+# transfer-only merchants — a fuel pump, a prepaid utility meter, a barber, rent,
+# a loan repayment — are deliberately absent: they do not email an itemised
+# receipt, so the fetcher skips them the way a real inbox scan would find nothing
+# from them. Keywords are matched as normalised substrings of the description, so
+# 'shoprite' matches 'Shoprite Manda Hill'. Short or ambiguous fragments are
+# avoided to prevent false matches (e.g. no bare 'total', which is a fuel brand
+# here).
+EMAIL_RECEIPT_MERCHANTS = (
+    # Ride-hailing & taxi apps
+    'uber', 'bolt', 'lyft', 'yango', 'indrive', 'ubuntu cab', 'little cab',
+    'careem', 'didi',
+    # Food delivery & fast-food apps
+    'uber eats', 'glovo', 'jumia food', 'mr d', 'deliveroo', 'doordash',
+    'grubhub', 'kfc', 'hungry lion', 'debonairs', 'steers', 'nandos',
+    'pizza hut', 'dominos', 'mcdonald', 'chicken inn', 'subway', 'galitos',
+    # Online marketplaces & e-commerce
+    'amazon', 'takealot', 'jumia', 'aliexpress', 'alibaba', 'shein', 'temu',
+    'ebay', 'etsy', 'kilimall', 'konga', 'zando', 'superbalist',
+    # Big retailers with e-receipts / loyalty email
+    'shoprite', 'pick n pay', 'picknpay', 'spar', 'checkers', 'woolworths',
+    'game store', 'game stores', 'mr price', 'edgars', 'builders',
+    'cash crusaders',
+    # Streaming, app stores & digital subscriptions
+    'netflix', 'spotify', 'showmax', 'dstv', 'gotv', 'multichoice', 'youtube',
+    'apple', 'itunes', 'app store', 'google', 'play store', 'microsoft', 'xbox',
+    'playstation', 'steam', 'canva', 'adobe', 'prime video', 'amazon prime',
+    # Telecom airtime / data bought online
+    'airtel', 'mtn', 'zamtel', 'vodacom', 'safaricom',
+    # Airlines, travel & hospitality
+    'airbnb', 'booking', 'expedia', 'emirates', 'kenya airways', 'ethiopian',
+    'proflight', 'airlink', 'fastjet', 'mahogany air', 'qatar airways',
+    'turkish airlines',
+    # Online betting / gaming (email confirmations)
+    'betway', 'gal sport', 'premierbet', 'betpawa',
+    # Payments / fintech that email confirmations
+    'paypal', 'flutterwave', 'payfast', 'stripe',
+    # Pharmacies & health retailers with e-receipts
+    'link pharmacy', 'clicks', 'dischem', 'pharmacy',
+)
+
 SCENARIO_ITEMS = {
     'Groceries': [
         ('Bread 700g', 25.00), ('Fresh Milk 2L', 40.00), ('Eggs (1 dozen)', 55.00),
@@ -193,6 +235,20 @@ def scenario_for(description=None, category=None):
     if category in SCENARIO_ITEMS:
         return category
     return merchant_category or category
+
+
+def emails_receipt(description):
+    """True when a transaction's merchant is one that sends a digital / email
+    receipt the auto-fetcher could realistically retrieve.
+
+    Used to filter which transactions the mock email fetcher acts on, so it only
+    "finds" receipts from recognised online/app merchants (Uber, Amazon, food
+    delivery, streaming, big retailers) and skips cash- or transfer-only ones
+    (fuel, utilities, rent, a barber) — the way scanning a real inbox would.
+    """
+    text = normalise(description)
+    return bool(text) and any(keyword in text
+                              for keyword in EMAIL_RECEIPT_MERCHANTS)
 
 
 def _scan_receipt_mock(target_amount=None, category=None, description=None):

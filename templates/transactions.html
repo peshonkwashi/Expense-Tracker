@@ -7,19 +7,38 @@
 deduplicates it for you. Correct anything it gets wrong — it learns from every
 correction.</p>
 
-<div class="card">
-    <h2>Upload a bank statement</h2>
-    <form method="POST" enctype="multipart/form-data" class="split">
-<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-        <div style="flex:1;min-width:260px;">
-            <input type="file" name="file" accept=".csv" required>
-            <p class="hint">CSV only, up to 5MB. Your file needs a date column, a
-            description column and an amount — either a single Amount column with a
-            Debit/Credit type, or separate Debit and Credit columns. Uploading the
-            same statement twice is safe; duplicates are skipped.</p>
-        </div>
-        <button type="submit">Upload and categorise</button>
-    </form>
+<div class="grid {% if demo_features %}three{% else %}two{% endif %}" style="margin-bottom:1.25rem;">
+    {% if demo_features %}
+    <div class="card">
+        <h2>Sync with Bank</h2>
+        <p class="muted">Connect to your bank via Open Banking (Mocked). Instantly downloads your latest transactions without manual CSV uploads.</p>
+        <form method="POST" action="{{ url_for('sync_bank') }}" onsubmit="this.querySelector('button').innerText = 'Connecting...'; setTimeout(() => { this.querySelector('button').innerText = 'Downloading...'; }, 800);">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <button type="submit" class="primary" style="width: 100%; margin-top: 1rem;">Sync Accounts</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Sync Mobile Money</h2>
+        <p class="muted">Link your MTN MoMo or Airtel Money wallet (Mocked). Pulls airtime, bill payments, MoMo-Pay purchases and transfers automatically.</p>
+        <form method="POST" action="{{ url_for('sync_momo') }}" onsubmit="this.querySelector('button').innerText = 'Connecting...'; setTimeout(() => { this.querySelector('button').innerText = 'Importing...'; }, 800);">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <button type="submit" class="primary" style="width: 100%; margin-top: 1rem;">Sync Wallet</button>
+        </form>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <h2>Manual CSV Upload</h2>
+        <form method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div style="margin-bottom: 0.5rem;">
+                <input type="file" name="file" accept=".csv" required style="width: 100%;">
+            </div>
+            <p class="hint" style="margin-bottom: 1rem;">CSV only, up to 5MB. Duplicates are skipped safely.</p>
+            <button type="submit" style="width: 100%;">Upload and categorise</button>
+        </form>
+    </div>
 </div>
 
 {% if metric %}

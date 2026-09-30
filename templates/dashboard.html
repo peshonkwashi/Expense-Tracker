@@ -67,6 +67,56 @@
 </div>
 {% endif %}
 
+{% if demo_features %}
+<div class="card" style="margin-bottom:1.25rem;">
+    <h2>AI Financial Assistant (Mock)</h2>
+    <p class="muted">Ask me questions about your spending! E.g. "How much did I spend on food this month?" or "Can I afford a new jacket?"</p>
+    
+    <div id="chat-history" style="min-height: 100px; max-height: 300px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.8rem;">
+        <!-- Chat bubbles will go here -->
+    </div>
+    
+    <form id="chat-form" style="display: flex; gap: 0.5rem;" onsubmit="handleChat(event)">
+        <input type="text" id="chat-input" placeholder="Ask your assistant..." style="flex: 1;" required>
+        <button type="submit" class="primary">Ask</button>
+    </form>
+    
+    <script>
+        async function handleChat(e) {
+            e.preventDefault();
+            const input = document.getElementById('chat-input');
+            const history = document.getElementById('chat-history');
+            const question = input.value;
+            if (!question.trim()) return;
+            
+            // Add User message
+            history.innerHTML += `<div style="align-self: flex-end; background: var(--brand); color: white; padding: 0.6rem 1rem; border-radius: 1rem 1rem 0 1rem; max-width: 80%;">${question}</div>`;
+            input.value = '';
+            
+            // Show loading
+            const loadingId = 'loading-' + Date.now();
+            history.innerHTML += `<div id="${loadingId}" style="align-self: flex-start; background: var(--info-soft); color: var(--ink); padding: 0.6rem 1rem; border-radius: 1rem 1rem 1rem 0; max-width: 80%; font-style: italic;">Thinking...</div>`;
+            history.scrollTop = history.scrollHeight;
+            
+            try {
+                const res = await fetch('{{ url_for("ask_assistant") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+                    body: JSON.stringify({ question: question })
+                });
+                const data = await res.json();
+                
+                document.getElementById(loadingId).remove();
+                history.innerHTML += `<div style="align-self: flex-start; background: var(--info-soft); color: var(--ink); padding: 0.6rem 1rem; border-radius: 1rem 1rem 1rem 0; max-width: 80%;">${data.answer}</div>`;
+                history.scrollTop = history.scrollHeight;
+            } catch (err) {
+                document.getElementById(loadingId).innerText = "Error connecting to assistant.";
+            }
+        }
+    </script>
+</div>
+{% endif %}
+
 <div class="grid two">
     <div class="card">
         <h2>Budget vs actual</h2>

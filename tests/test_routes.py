@@ -111,7 +111,7 @@ class AuthenticationTests(RouteTestCase):
         self.complete_setup()
         self.client.get('/logout')
         for path in ('/', '/transactions', '/budget', '/savings', '/reports',
-                     '/settings'):
+                     '/household', '/settings'):
             with self.subTest(path=path):
                 response = self.client.get(path, follow_redirects=False)
                 self.assertEqual(response.status_code, 302)
@@ -158,7 +158,7 @@ class PageRenderTests(RouteTestCase):
 
     def test_all_pages_render_before_any_data_exists(self):
         for path in ('/', '/transactions', '/budget', '/savings', '/reports',
-                     '/settings'):
+                     '/household', '/settings'):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)
@@ -246,6 +246,28 @@ class FullFlowTests(RouteTestCase):
         self.assertEqual(updated['category_name'], 'Education')
         self.assertEqual(updated['category_source'], 'user')
 
+    def test_correction_triggers_automatic_retrain_and_reevaluation(self):
+        # A correction must retrain the categoriser AND re-run the forecast
+        # hold-out. The import pipeline never backtests, so a FORECASTING metric
+        # appearing only after a correction proves the auto re-evaluation ran.
+        import database
+        conn = database.get_db_connection()
+        self.assertIsNone(database.latest_metric(conn, 'FORECASTING'))
+        row = conn.execute(
+            "SELECT transaction_id FROM Transaction_Record "
+            "WHERE transaction_type = 'DEBIT' LIMIT 1").fetchone()
+        conn.close()
+
+        response = self.client.post(
+            f"/transactions/{row['transaction_id']}/category",
+            data={'category_name': 'Education'}, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+
+        conn = database.get_db_connection()
+        after = database.latest_metric(conn, 'FORECASTING')
+        conn.close()
+        self.assertIsNotNone(after)
+
     def test_recategorisation_rejects_an_unknown_category(self):
         import database
         conn = database.get_db_connection()
@@ -306,6 +328,213 @@ class FullFlowTests(RouteTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('attachment', response.headers['Content-Disposition'])
         response.close()  # release the file handle send_file opened
+
+
+class NewFeatureTests(RouteTestCase):
+    """Mock AI assistant, mock bank sync, and shared/household budgets."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.statement = build_statement(salary=SALARY, salary_day=SALARY_DAY)
+        with open(cls.statement, 'rb') as handle:
+            cls.payload = handle.read()
+
+    @classmethod
+    def tearDownClass(cls):
+        if os.path.exists(cls.statement):
+            os.unlink(cls.statement)
+
+    def setUp(self):
+        super().setUp()
+        self.complete_setup()
+        self.client.post('/transactions', data={
+            'file': (io.BytesIO(self.payload), 'sample_bank_statement.csv'),
+        }, content_type='multipart/form-data', follow_redirects=True)
+
+    def _txn_count(self):
+        import database
+        conn = database.get_db_connection()
+        n = conn.execute('SELECT COUNT(*) AS n FROM Transaction_Record').fetchone()['n']
+        conn.close()
+        return n
+
+    def test_bank_sync_downloads_new_transactions(self):
+        before = self._txn_count()
+        response = self.client.post('/sync-bank', follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Bank Sync Successful', response.data)
+        self.assertGreater(self._txn_count(), before)
+
+    def test_mobile_money_sync_imports_transactions(self):
+        before = self._txn_count()
+        response = self.client.post('/sync-momo', follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Mobile Money Sync Successful', response.data)
+        self.assertGreater(self._txn_count(), before)
+
+    def test_assistant_answers_total_spend(self):
+        response = self.client.post(
+            '/ask-assistant', json={'question': 'how much have I spent in total?'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['answer'])
+
+    def test_assistant_budget_question_uses_the_recommender(self):
+        # Exercises the build_budget / learning_status wiring that previously
+        # imported from the wrong modules and 500'd.
+        response = self.client.post(
+            '/ask-assistant', json={'question': 'what is my budget this month?'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['answer'])
+
+    def test_assistant_handles_an_unrecognised_question(self):
+        response = self.client.post(
+            '/ask-assistant', json={'question': 'tell me a joke'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("couldn't quite catch", response.get_json()['answer'])
+
+    def test_auto_fetch_itemises_recent_transactions(self):
+        response = self.client.post('/auto-fetch-receipts', follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Auto-Fetch Complete', response.data)
+        import database
+        conn = database.get_db_connection()
+        n = conn.execute('SELECT COUNT(*) AS n FROM Receipt_Item').fetchone()['n']
+        conn.close()
+        self.assertGreater(n, 0)
+
+    def test_auto_fetch_only_itemises_email_receipt_merchants(self):
+        # The fetcher must skip cash/fuel/utility merchants and only itemise
+        # transactions from merchants that email a digital receipt.
+        from services import ocr
+        self.client.post('/auto-fetch-receipts', follow_redirects=True)
+        import database
+        conn = database.get_db_connection()
+        itemised = conn.execute(
+            'SELECT DISTINCT t.description FROM Receipt_Item r '
+            'JOIN Transaction_Record t ON r.transaction_id = t.transaction_id'
+        ).fetchall()
+        conn.close()
+        self.assertGreater(len(itemised), 0)
+        for row in itemised:
+            with self.subTest(merchant=row['description']):
+                self.assertTrue(ocr.emails_receipt(row['description']))
+
+    def test_bank_sync_is_idempotent_within_a_day(self):
+        first = self.client.post('/sync-bank', follow_redirects=True)
+        self.assertIn(b'Bank Sync Successful', first.data)
+        count_after_first = self._txn_count()
+        second = self.client.post('/sync-bank', follow_redirects=True)
+        self.assertIn(b'already up to date', second.data)
+        self.assertEqual(self._txn_count(), count_after_first)
+
+    def test_sync_triggers_retrain_and_forecast_reevaluation(self):
+        # The import pipeline never backtests, so a FORECASTING metric appearing
+        # after a sync proves the sync now retrains + re-evaluates like an upload.
+        import database
+        conn = database.get_db_connection()
+        self.assertIsNone(database.latest_metric(conn, 'FORECASTING'))
+        conn.close()
+        self.client.post('/sync-bank', follow_redirects=True)
+        conn = database.get_db_connection()
+        self.assertIsNotNone(database.latest_metric(conn, 'FORECASTING'))
+        conn.close()
+
+    def test_assistant_forecasts_next_month(self):
+        response = self.client.post(
+            '/ask-assistant', json={'question': "what's my forecast for next month?"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['answer'])
+
+    def test_assistant_reports_subscriptions(self):
+        response = self.client.post(
+            '/ask-assistant', json={'question': 'what are my subscriptions?'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['answer'])
+
+    def test_assistant_reports_savings_goals(self):
+        from datetime import date, timedelta
+        target = (date.today() + timedelta(days=180)).isoformat()
+        self.client.post('/savings', data={
+            'goal_name': 'Emergency fund', 'target_amount': '15000',
+            'target_date': target}, follow_redirects=True)
+        response = self.client.post(
+            '/ask-assistant', json={'question': 'how are my savings goals doing?'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Emergency fund', response.get_json()['answer'])
+
+    def test_household_leave_removes_the_partner(self):
+        self.client.post('/household', data={
+            'partner_name': 'Alex', 'partner_salary': '5000'}, follow_redirects=True)
+        import database
+        conn = database.get_db_connection()
+        self.assertEqual(
+            conn.execute('SELECT COUNT(*) AS n FROM User').fetchone()['n'], 2)
+        conn.close()
+
+        response = self.client.post('/household/leave', follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Invite your partner', response.data)  # single-user view
+        conn = database.get_db_connection()
+        self.assertEqual(
+            conn.execute('SELECT COUNT(*) AS n FROM User').fetchone()['n'], 1)
+        conn.close()
+
+    def test_settings_title_block_is_not_corrupted(self):
+        # A copy-paste once jammed the auto-fetcher card into {% block title %},
+        # rendering the whole card as the page <title>. Guard against a repeat.
+        response = self.client.get('/settings')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'<title>Settings</title>', response.data)
+        self.assertEqual(response.data.count(b'Email Receipt Auto-Fetcher'), 1)
+
+    def test_household_invite_creates_partner_and_settles(self):
+        first = self.client.get('/household')
+        self.assertEqual(first.status_code, 200)
+        self.assertIn(b'Invite your partner', first.data)
+
+        invited = self.client.post('/household', data={
+            'partner_name': 'Alex', 'partner_salary': '5000',
+        }, follow_redirects=True)
+        self.assertEqual(invited.status_code, 200)
+        self.assertIn(b'Household Settlement', invited.data)
+        self.assertIn(b'Alex', invited.data)
+
+
+class DemoFeatureFlagTests(RouteTestCase):
+    """DEMO_FEATURES gates all the mock extensions on/off together."""
+
+    def setUp(self):
+        super().setUp()
+        self.complete_setup()
+
+    def test_demo_entry_points_present_by_default(self):
+        dashboard = self.client.get('/').data
+        self.assertIn(b'AI Financial Assistant', dashboard)
+        self.assertIn(b'Household', dashboard)  # nav link
+        self.assertEqual(self.client.get('/household').status_code, 200)
+        self.assertIn(b'Sync with Bank', self.client.get('/transactions').data)
+
+    def test_disabled_hides_ui_and_404s_the_routes(self):
+        import config
+        original = config.DEMO_FEATURES
+        config.DEMO_FEATURES = False
+        try:
+            dashboard = self.client.get('/').data
+            self.assertNotIn(b'AI Financial Assistant', dashboard)
+            self.assertNotIn(b'Household', dashboard)
+            self.assertNotIn(b'Sync with Bank',
+                             self.client.get('/transactions').data)
+            self.assertNotIn(b'Email Receipt Auto-Fetcher',
+                             self.client.get('/settings').data)
+            for path in ('/sync-bank', '/sync-momo', '/ask-assistant',
+                         '/auto-fetch-receipts', '/household/leave'):
+                self.assertEqual(self.client.post(path).status_code, 404, path)
+            self.assertEqual(self.client.get('/household').status_code, 404)
+            # The core CSV upload path (FR-01) is never gated.
+            self.assertIn(b'Manual CSV Upload',
+                          self.client.get('/transactions').data)
+        finally:
+            config.DEMO_FEATURES = original
 
 
 if __name__ == '__main__':

@@ -37,7 +37,16 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 def inject_globals():
     return {'currency': config.CURRENCY, 'now': datetime.now(),
             'session_timeout': config.SESSION_TIMEOUT_MINUTES,
-            'nudge_threshold': int(config.NUDGE_THRESHOLD * 100)}
+            'nudge_threshold': int(config.NUDGE_THRESHOLD * 100),
+            'demo_features': config.DEMO_FEATURES}
+
+
+def _demo_only():
+    """Abort with 404 when demo features are disabled, so the mock routes behave
+    as if they do not exist in a spec-only (DEMO_FEATURES=0) build. Read at call
+    time so the flag can be toggled in tests."""
+    if not config.DEMO_FEATURES:
+        abort(404)
 
 
 @app.template_filter('money')
@@ -187,6 +196,165 @@ def _dashboard_context(conn, user):
             'budget': budget, 'nudges': nudges, 'suggestions': suggestions}
 
 
+# --- AI Assistant Mock -------------------------------------------------------
+
+@app.route('/ask-assistant', methods=['POST'])
+@security.login_required
+def ask_assistant():
+    from flask import jsonify
+    from datetime import date
+    _demo_only()
+    conn = database.get_db_connection()
+    try:
+        user = database.get_user(conn)
+
+        payload = request.get_json(silent=True) or {}
+        question = payload.get('question', '').lower()
+        month_str = date.today().strftime('%Y-%m')
+        
+        # 1. Fetch all dynamic categories
+        categories = conn.execute("SELECT category_name FROM Category").fetchall()
+        category_names = [c['category_name'].lower() for c in categories]
+        
+        matched_cat = None
+        for c in category_names:
+            if c in question:
+                matched_cat = c
+                break
+        
+        # 2. Logic Tree
+        if 'budget' in question or 'limit' in question or 'allocate' in question:
+            learning = behavioural.learning_status(conn, user)
+
+            if not learning['complete']:
+                response_text = "I can't calculate budget limits yet because you are still in the learning phase!"
+            else:
+                budget = recommendation.build_budget(conn, user)
+                if matched_cat:
+                    cat_budget = next((row for row in budget['rows'] if row['category'].lower() == matched_cat), None)
+                    if cat_budget:
+                        response_text = f"Your recommended budget for **{cat_budget['category']}** is <strong>{cat_budget['recommended']:,.2f}</strong>. You have spent <strong>{cat_budget['spent']:,.2f}</strong> so far."
+                    else:
+                        response_text = f"You don't have a specific budget allocation for {matched_cat.title()}."
+                else:
+                    response_text = f"Your total recommended spending budget this month is <strong>{budget['allocated_total']:,.2f}</strong>, and your savings target is <strong>{budget['recommended_savings']:,.2f}</strong>."
+
+        elif ('forecast' in question or 'predict' in question
+              or 'next month' in question or 'expect' in question):
+            forecasts = forecasting.generate_forecasts(conn, user['user_id'])
+            if not forecasts:
+                response_text = ("I need a few complete months of history before I can "
+                                 "forecast your spending — keep importing and I'll start "
+                                 "predicting soon.")
+            elif matched_cat:
+                cat_fc = next((f for name, f in forecasts.items()
+                               if name.lower() == matched_cat), None)
+                if cat_fc:
+                    response_text = (f"I forecast you'll spend about "
+                                     f"<strong>{cat_fc['amount']:,.2f}</strong> on "
+                                     f"<strong>{matched_cat.title()}</strong> next month "
+                                     f"({cat_fc['method']}).")
+                else:
+                    response_text = (f"I don't have enough history to forecast "
+                                     f"{matched_cat.title()} yet.")
+            else:
+                total_fc = sum(f['amount'] for f in forecasts.values())
+                response_text = (f"Based on your spending history, I forecast about "
+                                 f"<strong>{total_fc:,.2f}</strong> of spending across all "
+                                 f"categories next month.")
+
+        elif 'goal' in question or 'saving' in question:
+            goals = recommendation.goal_requirements(conn, user['user_id'])
+            if not goals:
+                response_text = ("You haven't set any savings goals yet. Add one on the "
+                                 "Savings Goals page and I'll track your progress here.")
+            else:
+                parts = [
+                    (f"<strong>{g['goal_name']}</strong> is {g['progress']:.0f}% funded"
+                     f" ({g['monthly_required']:,.2f}/month still needed"
+                     f"{' — overdue' if g['overdue'] else ''})")
+                    for g in goals[:3]
+                ]
+                response_text = ("Here is where your savings goals stand: "
+                                 + "; ".join(parts) + ".")
+
+        elif 'subscription' in question or 'recurring' in question:
+            row = conn.execute(
+                "SELECT COUNT(*) as n, COALESCE(SUM(amount), 0) as total "
+                "FROM Transaction_Record WHERE user_id = ? AND is_subscription = 1 "
+                "AND transaction_type = 'DEBIT' "
+                "AND strftime('%Y-%m', transaction_date) = ?",
+                (user['user_id'], month_str)
+            ).fetchone()
+            if not row['n']:
+                response_text = ("I haven't detected any recurring subscriptions yet — "
+                                 "they show up once a charge repeats at a steady amount "
+                                 "each month.")
+            else:
+                monthly = float(row['total'])
+                response_text = (f"You have <strong>{row['n']}</strong> recurring "
+                                 f"subscription(s) costing <strong>{monthly:,.2f}</strong> "
+                                 f"this month, about <strong>{monthly * 12:,.2f}</strong> a "
+                                 f"year. Cancelling one you no longer use is the easiest "
+                                 f"saving available to you.")
+
+        elif matched_cat:
+            row = conn.execute(
+                "SELECT SUM(t.amount) as total FROM Transaction_Record t "
+                "JOIN Category c ON t.category_id = c.category_id "
+                "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' "
+                "AND LOWER(c.category_name) = ? "
+                "AND strftime('%Y-%m', t.transaction_date) = ?",
+                (user['user_id'], matched_cat, month_str)
+            ).fetchone()
+            total = row['total'] or 0.0
+            response_text = f"You have spent <strong>{total:,.2f}</strong> on <strong>{matched_cat.title()}</strong> this month."
+            
+        elif 'total' in question or 'all' in question or ('how much' in question and 'spent' in question):
+            row = conn.execute(
+                "SELECT SUM(amount) as total FROM Transaction_Record "
+                "WHERE user_id = ? AND transaction_type = 'DEBIT' AND strftime('%Y-%m', transaction_date) = ?",
+                (user['user_id'], month_str)
+            ).fetchone()
+            total = row['total'] or 0.0
+            response_text = f"Your total spending across all categories this month is <strong>{total:,.2f}</strong>."
+            
+        elif 'food' in question or 'groceries' in question or 'eat' in question:
+            row = conn.execute(
+                "SELECT SUM(t.amount) as total FROM Transaction_Record t "
+                "JOIN Category c ON t.category_id = c.category_id "
+                "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' "
+                "AND c.category_name IN ('Groceries', 'Dining Out') "
+                "AND strftime('%Y-%m', t.transaction_date) = ?",
+                (user['user_id'], month_str)
+            ).fetchone()
+            total = row['total'] or 0.0
+            response_text = f"You have spent <strong>{total:,.2f}</strong> on food (Groceries and Dining Out) so far this month."
+            
+        elif 'afford' in question:
+            discretionary_spend = conn.execute(
+                "SELECT SUM(t.amount) as total FROM Transaction_Record t "
+                "JOIN Category c ON t.category_id = c.category_id "
+                "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' AND c.category_type = 'DISCRETIONARY' "
+                "AND strftime('%Y-%m', t.transaction_date) = ?",
+                (user['user_id'], month_str)
+            ).fetchone()['total'] or 0.0
+            
+            if discretionary_spend > (user['salary_amount'] * 0.2):
+                response_text = f"You've already spent <strong>{discretionary_spend:,.2f}</strong> on discretionary items this month. You might want to hold off!"
+            else:
+                response_text = f"You've only spent <strong>{discretionary_spend:,.2f}</strong> on discretionary items this month. If it's important, you can probably afford it!"
+        else:
+            response_text = ("I couldn't quite catch that. Try asking about your "
+                             "'budget', your 'total' spending, next month's 'forecast', "
+                             "your savings 'goals', your 'subscriptions', whether you can "
+                             "'afford' something, or a specific category like 'transport'.")
+            
+    finally:
+        conn.close()
+        
+    return jsonify({'answer': response_text})
+
 @app.route('/')
 @security.login_required
 def dashboard():
@@ -275,6 +443,149 @@ def export_transactions():
         )
     finally:
         conn.close()
+
+# --- Bank Sync Mock ----------------------------------------------------------
+
+@app.route('/sync-bank', methods=['POST'])
+@security.login_required
+def sync_bank():
+    _demo_only()
+    import random
+    from datetime import date, timedelta
+    
+    conn = database.get_db_connection()
+    try:
+        user = database.get_user(conn)
+        today = date.today()
+
+        # Real bank sync is idempotent: re-fetching the same window finds nothing
+        # new. Mirror that so repeated clicks don't pile up duplicate synthetic
+        # rows and inflate every chart.
+        if database.get_setting(conn, 'last_bank_sync') == today.isoformat():
+            flash("Your bank account is already up to date — no new transactions "
+                  "since your last sync today.", "info")
+            return redirect(url_for('transactions'))
+
+        # Realistic everyday merchants for a Zambian account (ZMW), each mapped
+        # to its true category so a synced row is indistinguishable from one read
+        # off an uploaded statement. All debits: a salary is monthly, not
+        # something a few-day sync pulls, and injecting a fake one every sync
+        # would distort the salary-cycle analysis and the savings pool.
+        merchants = [
+            ("Shoprite",      'Groceries',       80, 850),
+            ("Pick n Pay",    'Groceries',       60, 700),
+            ("Hungry Lion",   'Dining Out',      40, 220),
+            ("Ubuntu Cab",    'Transport',       25, 160),
+            ("Netflix",       'Subscriptions',  159, 159),
+            ("MTN Airtime",   'Airtime & Data',  20, 200),
+            ("Link Pharmacy", 'Healthcare',      30, 400),
+            ("Game Stores",   'Shopping',       100, 900),
+        ]
+        category_ids = {name: database.category_id_for(conn, cat)
+                        for name, cat, _, _ in merchants}
+
+        # 5-10 synthetic new transactions dated over the last few days.
+        num_txns = random.randint(5, 10)
+        added = 0
+        for _ in range(num_txns):
+            name, _cat, low, high = random.choice(merchants)
+            days_ago = random.randint(0, 3)
+            txn_date = (today - timedelta(days=days_ago)).strftime('%Y-%m-%d')
+            amt = round(random.uniform(low, high), 2)
+            conn.execute(
+                "INSERT INTO Transaction_Record (transaction_date, description, "
+                "amount, transaction_type, category_id, category_source, user_id) "
+                "VALUES (?, ?, ?, 'DEBIT', ?, 'rule', ?)",
+                (txn_date, name, amt, category_ids[name], user['user_id'])
+            )
+            added += 1
+
+        database.set_setting(conn, 'last_bank_sync', today.isoformat())
+        conn.commit()
+
+        # New data has arrived, so retrain and re-evaluate exactly as an upload or
+        # a correction does — otherwise the models would silently ignore synced
+        # rows while the other two ingestion paths learn from theirs.
+        _retrain_and_evaluate(conn, user['user_id'])
+
+        flash(f"Bank Sync Successful! Downloaded {added} new transactions and "
+              f"refreshed your categories, budget and forecasts.", "success")
+        return redirect(url_for('transactions'))
+    finally:
+        conn.close()
+
+
+# --- Mobile Money Sync Mock --------------------------------------------------
+
+@app.route('/sync-momo', methods=['POST'])
+@security.login_required
+def sync_momo():
+    _demo_only()
+    import random
+    from datetime import date, timedelta
+
+    conn = database.get_db_connection()
+    try:
+        user = database.get_user(conn)
+        today = date.today()
+
+        # Idempotent like a real wallet sync — a second pull the same day finds
+        # nothing new rather than duplicating synthetic transactions.
+        if database.get_setting(conn, 'last_momo_sync') == today.isoformat():
+            flash("Your mobile money wallet is already up to date — no new "
+                  "transactions since your last sync today.", "info")
+            return redirect(url_for('transactions'))
+
+        # Typical Zambian mobile-money outflows (MTN MoMo / Airtel Money), each
+        # mapped to its real category. Debit-only, on the same reasoning as the
+        # bank sync: money *received* over mobile money is not salary, and
+        # counting inbound transfers as income would distort the salary-cycle and
+        # savings figures. Mobile money's signature costs — airtime, bill
+        # payments, merchant MoMo-Pay, sending money and agent cash-out — are all
+        # outflows anyway, which is what the budget cares about.
+        merchants = [
+            ("MTN MoMo Airtime",         'Airtime & Data',  10,  100),
+            ("Airtel Money Data Bundle", 'Airtime & Data',  50,  250),
+            ("ZESCO Token via MoMo",     'Utilities',      100,  500),
+            ("DSTV Payment via MoMo",    'Subscriptions',  250,  500),
+            ("MoMo Pay - Shoprite",      'Groceries',       50,  600),
+            ("MoMo Pay - Pharmacy",      'Healthcare',      30,  300),
+            ("Send Money to Family",     'Transfers',      100, 1500),
+            ("Cash Out at MoMo Agent",   'Transfers',      200, 2000),
+            ("MoMo Withdrawal Fee",      'Transfers',        5,   40),
+        ]
+        category_ids = {name: database.category_id_for(conn, cat)
+                        for name, cat, _, _ in merchants}
+
+        # 5-10 synthetic wallet transactions dated over the last few days.
+        num_txns = random.randint(5, 10)
+        added = 0
+        for _ in range(num_txns):
+            name, _cat, low, high = random.choice(merchants)
+            days_ago = random.randint(0, 3)
+            txn_date = (today - timedelta(days=days_ago)).strftime('%Y-%m-%d')
+            amt = round(random.uniform(low, high), 2)
+            conn.execute(
+                "INSERT INTO Transaction_Record (transaction_date, description, "
+                "amount, transaction_type, category_id, category_source, user_id) "
+                "VALUES (?, ?, ?, 'DEBIT', ?, 'rule', ?)",
+                (txn_date, name, amt, category_ids[name], user['user_id'])
+            )
+            added += 1
+
+        database.set_setting(conn, 'last_momo_sync', today.isoformat())
+        conn.commit()
+
+        # Same as the bank sync: fresh data means retrain + re-evaluate.
+        _retrain_and_evaluate(conn, user['user_id'])
+
+        flash(f"Mobile Money Sync Successful! Imported {added} recent MTN MoMo / "
+              f"Airtel Money transactions and refreshed your budget and forecasts.",
+              "success")
+        return redirect(url_for('transactions'))
+    finally:
+        conn.close()
+
 
 @app.route('/transactions', methods=('GET', 'POST'))
 @security.login_required
@@ -440,8 +751,16 @@ def recategorise(transaction_id):
             'category_confidence = 1.0 WHERE transaction_id = ?',
             (category['category_id'], 'user', transaction_id))
         conn.commit()
-        flash(f'Recategorised as {category_name}. The model will learn from '
-              f'this correction on the next retrain.', 'success')
+        # A correction is a new 'user'-sourced label, so retrain immediately: the
+        # model and the forecast reflect it without waiting for a manual retrain.
+        result, relabelled, _ = _retrain_and_evaluate(conn, user['user_id'])
+        if result['trained'] and relabelled:
+            flash(f'Recategorised as {category_name}. The model retrained on your '
+                  f'correction and relabelled {relabelled} similar transaction(s).',
+                  'success')
+        else:
+            flash(f'Recategorised as {category_name}. The model has learned from '
+                  f'your correction.', 'success')
         return redirect(request.referrer or url_for('transactions'))
     finally:
         conn.close()
@@ -624,6 +943,254 @@ def reports():
         conn.close()
 
 
+# --- Household Mock --------------------------------------------------------
+
+@app.route('/household', methods=['GET', 'POST'])
+@security.login_required
+def household():
+    _demo_only()
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        
+        # Handle "Invite Partner" mock action
+        if request.method == 'POST':
+            partner_name = request.form.get('partner_name', 'Alex')
+            partner_salary = request.form.get('partner_salary', 5000)
+            
+            # Check if partner exists
+            partner = conn.execute('SELECT * FROM User WHERE user_id != ?', (user['user_id'],)).fetchone()
+            if not partner:
+                conn.execute(
+                    'INSERT INTO User (full_name, salary_amount, salary_day) VALUES (?, ?, ?)',
+                    (partner_name, partner_salary, user['salary_day'])
+                )
+                conn.commit()
+                partner = conn.execute('SELECT * FROM User WHERE user_id != ?', (user['user_id'],)).fetchone()
+                
+                # Generate some mock transactions for the partner
+                import random
+                from datetime import date
+                today = date.today()
+                month_prefix = today.strftime('%Y-%m')
+                essential_cat = conn.execute("SELECT category_id FROM Category WHERE category_type = 'ESSENTIAL'").fetchone()[0]
+                discretionary_cat = conn.execute("SELECT category_id FROM Category WHERE category_type = 'DISCRETIONARY'").fetchone()[0]
+                
+                # 10 mock transactions for partner
+                for _ in range(10):
+                    day = str(random.randint(1, 28)).zfill(2)
+                    amt = round(random.uniform(20.0, 300.0), 2)
+                    cat = random.choice([essential_cat, discretionary_cat])
+                    desc = f"Mock Partner Exp {day}"
+                    conn.execute(
+                        "INSERT INTO Transaction_Record (transaction_date, description, amount, transaction_type, user_id, category_id) "
+                        "VALUES (?, ?, ?, 'DEBIT', ?, ?)",
+                        (f"{month_prefix}-{day}", desc, amt, partner['user_id'], cat)
+                    )
+                conn.commit()
+                flash(f"{partner_name} has accepted your household invitation!", "success")
+                return redirect(url_for('household'))
+        
+        # Load partner data if exists
+        partner = conn.execute('SELECT * FROM User WHERE user_id != ?', (user['user_id'],)).fetchone()
+        stats = None
+        breakdown = None
+        if partner:
+            # Calculate who owes who based on ESSENTIAL spending this month
+            from datetime import date
+            month_str = date.today().strftime('%Y-%m')
+            
+            def get_essential_spend(uid):
+                row = conn.execute(
+                    "SELECT SUM(t.amount) as total FROM Transaction_Record t "
+                    "JOIN Category c ON t.category_id = c.category_id "
+                    "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' AND c.category_type = 'ESSENTIAL' "
+                    "AND strftime('%Y-%m', t.transaction_date) = ?",
+                    (uid, month_str)
+                ).fetchone()
+                return row['total'] or 0.0
+
+            user_spend = get_essential_spend(user['user_id'])
+            partner_spend = get_essential_spend(partner['user_id'])
+            total_spend = user_spend + partner_spend
+            fair_share = total_spend / 2
+            
+            owes = 0
+            ower = ""
+            if user_spend > partner_spend:
+                owes = user_spend - fair_share
+                ower = partner['full_name']
+                verb = "owes"
+                owee = "you"
+            else:
+                owes = partner_spend - fair_share
+                ower = "You"
+                verb = "owe"
+                owee = partner['full_name']
+
+            stats = {
+                'user_spend': user_spend,
+                'partner_spend': partner_spend,
+                'total': total_spend,
+                'fair_share': fair_share,
+                'ower': ower,
+                'verb': verb,
+                'owee': owee,
+                'owes_amount': owes
+            }
+            
+            # Fetch category breakdown for the table
+            breakdown_query = """
+                SELECT c.category_name, 
+                       SUM(CASE WHEN t.user_id = ? THEN t.amount ELSE 0 END) as user_spent,
+                       SUM(CASE WHEN t.user_id = ? THEN t.amount ELSE 0 END) as partner_spent,
+                       SUM(t.amount) as total_spent
+                FROM Transaction_Record t
+                JOIN Category c ON t.category_id = c.category_id
+                WHERE t.transaction_type = 'DEBIT' AND c.category_type = 'ESSENTIAL'
+                AND strftime('%Y-%m', t.transaction_date) = ?
+                GROUP BY c.category_name
+                ORDER BY total_spent DESC
+            """
+            breakdown = conn.execute(breakdown_query, (user['user_id'], partner['user_id'], month_str)).fetchall()
+
+        return render_template('household.html', user=user, partner=partner, stats=stats, breakdown=breakdown)
+    finally:
+        conn.close()
+
+
+@app.route('/household/leave', methods=['POST'])
+@security.login_required
+def leave_household():
+    """Dissolve the household: remove the mock partner and all of their data,
+    returning the app to its single-user state so the demo can be reset and run
+    again."""
+    _demo_only()
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        partner = conn.execute('SELECT * FROM User WHERE user_id != ?',
+                               (user['user_id'],)).fetchone()
+        if not partner:
+            flash("You are not in a household.", "info")
+            return redirect(url_for('household'))
+
+        # Remove the partner's data in FK order (receipt items -> transactions ->
+        # the partner profile). Only the partner is touched; the primary user's
+        # data is never affected.
+        conn.execute(
+            'DELETE FROM Receipt_Item WHERE transaction_id IN '
+            '(SELECT transaction_id FROM Transaction_Record WHERE user_id = ?)',
+            (partner['user_id'],))
+        conn.execute('DELETE FROM Transaction_Record WHERE user_id = ?',
+                     (partner['user_id'],))
+        conn.execute('DELETE FROM SavingsGoal WHERE user_id = ?',
+                     (partner['user_id'],))
+        conn.execute('DELETE FROM BudgetRecommendation WHERE user_id = ?',
+                     (partner['user_id'],))
+        conn.execute('DELETE FROM User WHERE user_id = ?', (partner['user_id'],))
+        conn.commit()
+        flash(f"{partner['full_name']} has left the household — their profile and "
+              f"transactions were removed.", "info")
+        return redirect(url_for('household'))
+    finally:
+        conn.close()
+
+
+# --- Auto-Fetch Receipts Mock ----------------------------------------------
+
+@app.route('/auto-fetch-receipts', methods=['POST'])
+@security.login_required
+def auto_fetch_receipts():
+    _demo_only()
+    import os
+    conn = database.get_db_connection()
+    try:
+        user = database.get_user(conn)
+        
+        from services.ocr import scan_receipt, emails_receipt, EMAIL_RECEIPT_MERCHANTS
+        
+        query = """
+            SELECT t.transaction_id, t.description, t.amount, c.category_name, t.transaction_date
+            FROM Transaction_Record t
+            LEFT JOIN Category c ON t.category_id = c.category_id
+            WHERE t.user_id = ? AND t.transaction_type = 'DEBIT'
+            AND t.is_subscription = 0 AND t.is_salary = 0
+            AND NOT EXISTS (
+                SELECT 1 FROM Receipt_Item r WHERE r.transaction_id = t.transaction_id
+            )
+            ORDER BY t.transaction_date DESC
+            LIMIT 10
+        """
+        unitemized = conn.execute(query, (user['user_id'],)).fetchall()
+        
+        # Filter down to just transactions that actually email receipts based on the new keywords
+        eligible = [txn for txn in unitemized if emails_receipt(txn['description'])]
+        
+        if not eligible:
+            flash("Scanned your inbox, but couldn't find any new digital receipts.", "info")
+            return redirect(url_for('transactions'))
+            
+        # 2. Attempt real IMAP connection if credentials are provided in environment
+        mail = None
+        email_address = os.environ.get('IMAP_EMAIL')
+        app_password = os.environ.get('IMAP_PASSWORD')
+        
+        if email_address and app_password:
+            try:
+                from services.imap_fetcher import connect_imap
+                mail = connect_imap(email_address, app_password)
+            except Exception as e:
+                print(f"[IMAP] Connection failed: {e}")
+        
+        from services.imap_fetcher import fetch_receipt_attachment
+        
+        merchant_names = []
+        for txn in eligible:
+            # Find which keyword matched
+            desc_lower = txn['description'].lower()
+            keyword = next((kw for kw in EMAIL_RECEIPT_MERCHANTS if kw in desc_lower), desc_lower)
+            
+            temp_path = None
+            if mail:
+                try:
+                    temp_path = fetch_receipt_attachment(mail, keyword, days_back=14)
+                except Exception as e:
+                    print(f"[IMAP] Failed to fetch {keyword}: {e}")
+            
+            # If we fetched a real PDF/image, scan_receipt will OCR it. 
+            # If temp_path is None, it gracefully falls back to the mock generator.
+            items = scan_receipt(temp_path, target_amount=txn['amount'], category=txn['category_name'], description=txn['description'])
+            
+            for item in items:
+                conn.execute('INSERT INTO Receipt_Item (transaction_id, item_name, amount, quantity) VALUES (?, ?, ?, ?)',
+                             (txn['transaction_id'], item['name'], item['price'], item['quantity']))
+                             
+            # Clean up the temp file if we created one
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+            merchant_names.append(txn['description'])
+            
+        if mail:
+            try:
+                mail.logout()
+            except Exception:
+                pass
+
+        conn.commit()
+        
+        merchants_str = ", ".join(merchant_names)
+        if email_address and app_password:
+            flash(f"Auto-Fetch Complete via IMAP! Found {len(eligible)} digital receipts ({merchants_str}) and itemized them.", "success")
+        else:
+            flash(f"Auto-Fetch Complete (Mocked)! Found {len(eligible)} digital receipts ({merchants_str}). Set IMAP_EMAIL to use real inbox scanning.", "success")
+            
+    finally:
+        conn.close()
+        
+    return redirect(url_for('transactions'))
+
 # --- Settings --------------------------------------------------------------
 
 @app.route('/settings')
@@ -642,6 +1209,23 @@ def settings():
         conn.close()
 
 
+def _retrain_and_evaluate(conn, user_id):
+    """Retrain the categoriser, relabel anything still uncategorised, re-run the
+    forecast hold-out and refresh subscription detection.
+
+    Shared by the manual Settings action and the automatic retrain a user
+    correction triggers, so both run exactly the same steps against the same
+    functions. Returns (training_result, relabelled_count, forecast_evaluation).
+    """
+    result = categorization.train_categorization_model(conn, user_id)
+    relabelled = 0
+    if result['trained']:
+        relabelled = categorization.recategorise_uncategorised(conn, user_id)
+    evaluation = forecasting.backtest(conn, user_id)
+    subscriptions.detect_subscriptions(conn, user_id)
+    return result, relabelled, evaluation
+
+
 @app.route('/settings/retrain', methods=('POST',))
 @security.login_required
 def retrain():
@@ -649,9 +1233,8 @@ def retrain():
     conn = get_db_connection()
     try:
         user = database.get_user(conn)
-        result = categorization.train_categorization_model(conn, user['user_id'])
+        result, relabelled, evaluation = _retrain_and_evaluate(conn, user['user_id'])
         if result['trained']:
-            relabelled = categorization.recategorise_uncategorised(conn, user['user_id'])
             f1_text = (f"{result['f1']:.3f}" if result['f1'] is not None
                        else 'not cross-validated')
             flash(f"Retrained {result['algorithm']} on {result['samples']} "
@@ -660,18 +1243,16 @@ def retrain():
         else:
             flash(f"Not retrained: {result['reason']}", 'warning')
 
-        evaluation = forecasting.backtest(conn, user['user_id'])
         if evaluation['evaluated']:
             verdict = ('within' if evaluation['meets_target'] else 'outside')
-            flash(f"Forecast hold-out on {evaluation['test_month']}: MAE "
-                  f"{evaluation['mae']:.2f} {config.CURRENCY} "
-                  f"({evaluation['mae_ratio'] * 100:.1f}% of mean actual, "
+            flash(f"Forecast hold-out on {evaluation['test_month']}: monthly-total "
+                  f"MAE {evaluation['mae']:.2f} {config.CURRENCY} "
+                  f"({evaluation['mae_ratio'] * 100:.1f}% of actual monthly spend, "
                   f"{verdict} the {config.MAX_MAE_RATIO * 100:.0f}% target).",
                   'info')
         else:
             flash(f"Forecast not evaluated: {evaluation['reason']}", 'info')
 
-        subscriptions.detect_subscriptions(conn, user['user_id'])
         return redirect(url_for('settings'))
     finally:
         conn.close()

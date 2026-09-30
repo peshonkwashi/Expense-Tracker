@@ -9,7 +9,11 @@ import os
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 # --- Storage (all local, NFR-05) ------------------------------------------
-DATABASE_PATH = os.path.join(BASE_DIR, 'expense_tracker.db')
+# The database path can be overridden with EXPENSE_TRACKER_DB so a throwaway
+# database can be used for a demo or a manual walkthrough without touching the
+# real expense_tracker.db. The default is the local file, unchanged.
+DATABASE_PATH = os.environ.get(
+    'EXPENSE_TRACKER_DB', os.path.join(BASE_DIR, 'expense_tracker.db'))
 SCHEMA_PATH = os.path.join(BASE_DIR, 'schema.sql')
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 MODEL_DIR = os.path.join(BASE_DIR, 'ml', 'models')
@@ -80,6 +84,16 @@ SUBSCRIPTION_MAX_INTERVAL_DAYS = 38
 ESSENTIAL_BUFFER = 0.05          # 5% headroom on essential categories
 NUDGE_THRESHOLD = 0.80           # alert at 80% of the recommended allocation
 DEFAULT_SAVINGS_RATE = 0.10      # floor applied when the user has no goals
+
+# --- Demo / mock features -------------------------------------------------
+# The proactive extensions the supervisor suggested — the AI assistant, bank and
+# mobile-money sync, household budgets and the email receipt auto-fetcher — are
+# demo mockups that sit outside the graded requirements (FR-01..FR-12). This
+# single switch shows or hides all of them together, so a clean, spec-only build
+# can be run for grading with DEMO_FEATURES=0 while the demo build (the default)
+# keeps them. When off, their routes return 404 and their UI entry points vanish.
+DEMO_FEATURES = os.environ.get('DEMO_FEATURES', '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off', '')
 
 # --- Smart suggestions (dashboard insights) -------------------------------
 # Thresholds for the plain-language savings suggestions on the dashboard.

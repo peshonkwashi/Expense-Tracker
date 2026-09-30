@@ -149,5 +149,30 @@ class ReceiptTextParsingTests(unittest.TestCase):
         self.assertEqual(round(sum(i['price'] for i in items), 2), 180.0)
 
 
+class EmailReceiptFilterTests(unittest.TestCase):
+    """The keyword filter that decides which merchants email a receipt."""
+
+    def test_online_and_app_merchants_email_a_receipt(self):
+        for merchant in ('Uber Eats', 'Amazon.com', 'Jumia Order', 'Yango Trip',
+                         'Shoprite Manda Hill', 'KFC Cairo Road', 'Mr Price Clothing',
+                         'Game Store Electronics', 'Betway Deposit',
+                         'NETFLIX.COM Subscription', 'MTN Data Bundle'):
+            with self.subTest(merchant=merchant):
+                self.assertTrue(ocr.emails_receipt(merchant))
+
+    def test_cash_fuel_and_utility_merchants_do_not(self):
+        for merchant in ('Fuel Puma Kabulonga', 'Engen Great East Rd',
+                         'Total Filling Station', 'ZESCO Prepaid Units',
+                         'LWSC Water Bill', 'Taxi Fare Town', 'Barber Shop',
+                         'Rent Payment Landlord', 'Bayport Loan Repayment',
+                         'Medical Clinic Visit'):
+            with self.subTest(merchant=merchant):
+                self.assertFalse(ocr.emails_receipt(merchant))
+
+    def test_blank_description_is_not_a_match(self):
+        self.assertFalse(ocr.emails_receipt(''))
+        self.assertFalse(ocr.emails_receipt(None))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+{% block title %}Household{% endblock %}
+{% block content %}
+
+<h1>Household Budgets</h1>
+<p class="lede">Manage shared expenses, invite a partner, and instantly see who owes what for the month's essential bills.</p>
+
+{% if not partner %}
+<div class="card" style="max-width: 500px; margin: 2rem auto;">
+    <h2>Invite your partner</h2>
+    <p class="muted">Send an invitation to link accounts. We'll simulate this by instantly creating a mock partner profile and generating some synthetic transactions for them.</p>
+    <form method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <div class="field">
+            <label for="partner_name">Partner's Name</label>
+            <input type="text" id="partner_name" name="partner_name" value="Alex" required>
+        </div>
+        <div class="field">
+            <label for="partner_salary">Partner's Monthly Salary ({{ currency }})</label>
+            <input type="number" id="partner_salary" name="partner_salary" value="5000" required>
+        </div>
+        <button type="submit" class="primary" style="width: 100%;">Send Invite & Mock Link</button>
+    </form>
+</div>
+{% else %}
+<div class="grid two" style="margin-bottom:1.25rem;">
+    <div class="stat">
+        <div class="label">Your Essential Spend</div>
+        <div class="value">{{ stats.user_spend|money }} {{ currency }}</div>
+    </div>
+    <div class="stat">
+        <div class="label">{{ partner['full_name'] }}'s Essential Spend</div>
+        <div class="value">{{ stats.partner_spend|money }} {{ currency }}</div>
+    </div>
+</div>
+
+<div class="card" style="text-align: center; padding: 3rem 1rem;">
+    <h2>Household Settlement</h2>
+    <p class="muted">Total essential spending this month: <strong>{{ stats.total|money }} {{ currency }}</strong></p>
+    <p class="muted">Fair share (50/50): <strong>{{ stats.fair_share|money }} {{ currency }}</strong></p>
+    
+    <div style="margin: 2rem 0; padding: 2rem; background: var(--info-soft); border-radius: var(--radius); border: 1px solid var(--info);">
+        <h1 style="color: var(--info); margin: 0; font-size: 2.5rem;">
+            {% if stats.owes_amount > 0 %}
+                {{ stats.ower }} {{ stats.verb }} {{ stats.owee }}<br>
+                {{ stats.owes_amount|money }} {{ currency }}
+            {% else %}
+                You are perfectly squared up!
+            {% endif %}
+        </h1>
+    </div>
+    <p class="muted">Discretionary spending is kept private and separated.</p>
+</div>
+
+<div class="card" style="margin-top: 2rem;">
+    <h2>Essential Spending Breakdown</h2>
+    <p class="muted">A combined view of household essentials for the current month.</p>
+    {% if breakdown %}
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Category</th>
+                    <th class="num">Your Spend</th>
+                    <th class="num">{{ partner['full_name'] }}'s Spend</th>
+                    <th class="num">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in breakdown %}
+                <tr>
+                    <td data-label="Category">
+                        <span class="badge essential">{{ row['category_name'] }}</span>
+                    </td>
+                    <td data-label="Your Spend" class="num">{{ row['user_spent']|money }}</td>
+                    <td data-label="{{ partner['full_name'] }}'s Spend" class="num">{{ row['partner_spent']|money }}</td>
+                    <td data-label="Total" class="num"><strong>{{ row['total_spent']|money }}</strong></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty">No essential spending recorded this month.</p>
+    {% endif %}
+</div>
+
+<div class="card" style="margin-top: 2rem;">
+    <h2>Leave household</h2>
+    <p class="muted">Dissolve this household and remove {{ partner['full_name'] }}'s
+    profile and transactions. Your own data is untouched. This cannot be undone.</p>
+    <form method="POST" action="{{ url_for('leave_household') }}"
+          onsubmit="return confirm('Remove {{ partner['full_name'] }} and all their data from this household?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <button type="submit" class="secondary">Leave household</button>
+    </form>
+</div>
+{% endif %}
+
+{% endblock %}
