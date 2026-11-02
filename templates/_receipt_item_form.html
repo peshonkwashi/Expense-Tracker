@@ -1,0 +1,7 @@
+<form method="POST" action="{{ url_for('add_receipt_item', transaction_id=txn_id) }}" class="receipt-item-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+    <input type="text" name="item_name" id="item-name-{{ txn_id }}" placeholder="Item" maxlength="60" required class="small" aria-label="Item name">
+    <input type="number" name="quantity" id="item-qty-{{ txn_id }}" value="1" min="1" max="999" step="1" class="small" aria-label="Quantity">
+    <input type="number" name="amount" id="item-amount-{{ txn_id }}" placeholder="Amount" min="0.01" max="100000" step="0.01" required class="small" aria-label="Line amount (ZMW)">
+    <button type="submit" class="secondary small" id="add-item-{{ txn_id }}">Add</button>
+</form>

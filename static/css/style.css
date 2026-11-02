@@ -187,6 +187,23 @@ button.small, .button.small, select.small { padding: .28rem .55rem; font-size: .
 
 .inline-form { display: inline-flex; gap: .35rem; align-items: center; margin: 0; }
 
+/* --- Receipt items ------------------------------------------------------ */
+.receipt-items { margin: 5px 0 .4rem; padding-left: 1.2rem; }
+.receipt-items li { display: flex; align-items: center; gap: .4rem; }
+.link-button {
+    background: none; border: 0; padding: 0 .3rem; color: var(--ink-soft);
+    font-size: 1.05rem; line-height: 1; cursor: pointer;
+}
+.link-button:hover { color: var(--danger); filter: none; }
+.receipt-mismatch { color: var(--warn); }
+.manual-items summary { cursor: pointer; color: var(--ink-soft); font-size: .82rem; }
+.manual-items summary:hover { color: var(--brand); }
+.receipt-item-form { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: .4rem 0 0; }
+.receipt-item-form input { padding: .28rem .45rem; font-size: .82rem; }
+.receipt-item-form input[name="item_name"] { flex: 1 1 9rem; min-width: 7rem; }
+.receipt-item-form input[name="quantity"] { width: 4rem; }
+.receipt-item-form input[name="amount"] { width: 6.5rem; }
+
 /* --- Charts ------------------------------------------------------------- */
 .chart-box { position: relative; height: 280px; }
 

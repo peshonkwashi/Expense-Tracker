@@ -1,107 +1,18 @@
-"""Unit tests for the mock OCR / scan-receipt service (section 5.10.2).
+"""Unit tests for the receipt OCR service (section 5.10.2).
 
-scan_receipt is pure (no database), so these tests are property-based: the
-exact items vary with a shuffle, but the scenario mapping and the reconciliation
-to the transaction total are guaranteed and are what these assert.
+The text parser and total extraction are pure and tested directly. The scan
+itself is tested for its error paths and, when Tesseract is installed, end to
+end on a receipt image rendered here.
 """
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services import ocr  # noqa: E402
-
-
-def _total(items):
-    return round(sum(i['price'] * 1 for i in items), 2)
-
-
-def _names(items):
-    return {i['name'] for i in items}
-
-
-class ScenarioMappingTests(unittest.TestCase):
-    def test_pharmacy_merchant_maps_to_healthcare(self):
-        self.assertEqual(ocr.scenario_for('Link Pharmacy Kabulonga'), 'Healthcare')
-        self.assertEqual(ocr.scenario_for('Medical Clinic Visit'), 'Healthcare')
-
-    def test_supermarket_merchant_maps_to_groceries(self):
-        self.assertEqual(ocr.scenario_for('Shoprite Manda Hill'), 'Groceries')
-        self.assertEqual(ocr.scenario_for('Pick n Pay Levy'), 'Groceries')
-
-    def test_fast_food_is_the_exception_and_wins_over_category(self):
-        # Even if the transaction was filed under Groceries, a KFC receipt is
-        # a fast-food menu, not a basket of groceries.
-        self.assertEqual(ocr.scenario_for('KFC Cairo Road', category='Groceries'),
-                         'Dining Out')
-        self.assertEqual(ocr.scenario_for('Hungry Lion'), 'Dining Out')
-
-    def test_unknown_merchant_falls_back_to_stored_category(self):
-        self.assertEqual(ocr.scenario_for('Zzz Unknown Shop', category='Groceries'),
-                         'Groceries')
-
-    def test_non_itemisable_merchant_is_not_a_basket_scenario(self):
-        # Fuel and utilities are recognised but are not itemisable baskets.
-        self.assertNotIn(ocr.scenario_for('Fuel Puma Kabulonga'), ocr.SCENARIO_ITEMS)
-        self.assertNotIn(ocr.scenario_for('ZESCO Prepaid Units'), ocr.SCENARIO_ITEMS)
-
-
-class ScanReceiptTests(unittest.TestCase):
-    def test_items_reconcile_to_the_transaction_total(self):
-        for desc in ('Shoprite Manda Hill', 'Link Pharmacy', 'KFC Cairo Road',
-                     'Fuel Puma', 'ZESCO Prepaid'):
-            with self.subTest(desc=desc):
-                items = ocr.scan_receipt('x.jpg', target_amount=437.50,
-                                         description=desc)
-                self.assertEqual(_total(items), 437.50)
-
-    def test_pharmacy_yields_medication_items(self):
-        items = ocr.scan_receipt('x.jpg', target_amount=400.0,
-                                 description='Link Pharmacy')
-        allowed = {name for name, _ in ocr.SCENARIO_ITEMS['Healthcare']} | {'Other Items'}
-        self.assertTrue(_names(items).issubset(allowed))
-        self.assertTrue(_names(items) - {'Other Items'})  # at least one real item
-
-    def test_supermarket_yields_grocery_items(self):
-        items = ocr.scan_receipt('x.jpg', target_amount=500.0,
-                                 description='Shoprite Manda Hill')
-        allowed = {name for name, _ in ocr.SCENARIO_ITEMS['Groceries']} | {'Other Items'}
-        self.assertTrue(_names(items).issubset(allowed))
-
-    def test_fast_food_yields_menu_items(self):
-        items = ocr.scan_receipt('x.jpg', target_amount=300.0,
-                                 description='KFC Cairo Road', category='Groceries')
-        allowed = {name for name, _ in ocr.SCENARIO_ITEMS['Dining Out']} | {'Other Items'}
-        self.assertTrue(_names(items).issubset(allowed))
-
-    def test_fuel_is_a_single_representative_line(self):
-        items = ocr.scan_receipt('x.jpg', target_amount=850.0,
-                                 description='Fuel Puma Kabulonga')
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]['price'], 850.0)
-        self.assertIn('Fuel', items[0]['name'])
-
-    def test_utility_single_line(self):
-        items = ocr.scan_receipt('x.jpg', target_amount=300.0,
-                                 description='ZESCO Prepaid Units')
-        self.assertEqual(len(items), 1)
-        self.assertEqual(_total(items), 300.0)
-
-    def test_tiny_amount_still_reconciles(self):
-        # Smaller than any single grocery item: one reconciling line.
-        items = ocr.scan_receipt('x.jpg', target_amount=5.0,
-                                 description='Shoprite')
-        self.assertEqual(_total(items), 5.0)
-
-    def test_missing_amount_uses_default_and_reconciles(self):
-        items = ocr.scan_receipt('x.jpg', target_amount=None,
-                                 description='Shoprite')
-        self.assertEqual(_total(items), ocr.DEFAULT_TARGET)
-
-    def test_zero_or_negative_amount_uses_default(self):
-        items = ocr.scan_receipt('x.jpg', target_amount=0, description='Shoprite')
-        self.assertEqual(_total(items), ocr.DEFAULT_TARGET)
 
 
 class ReceiptTextParsingTests(unittest.TestCase):
@@ -124,6 +35,23 @@ class ReceiptTextParsingTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['price'], 25.00)
 
+    def test_unit_price_gives_the_quantity(self):
+        for line in ('Eggs 2 12.50 25.00', 'Eggs 2 x 12.50 25.00',
+                     'Eggs 2x 12.50 25.00', 'Eggs 2 @ 12.50 25.00'):
+            with self.subTest(line=line):
+                [item] = ocr.parse_receipt_text(line)
+                self.assertEqual((item['name'], item['quantity'], item['price']),
+                                 ('Eggs', 2, 25.00))
+
+    def test_unrelated_second_number_is_not_a_quantity(self):
+        # 700g is part of the name and 9.99 does not divide 25.00 evenly.
+        [item] = ocr.parse_receipt_text('Bread 700g 9.99 25.00')
+        self.assertEqual(item['quantity'], 1)
+
+    def test_currency_markers_are_stripped_from_names(self):
+        items = ocr.parse_receipt_text('Bread K25.00\nMilk ZMW 40.00')
+        self.assertEqual([i['name'] for i in items], ['Bread', 'Milk'])
+
     def test_thousands_separator_is_handled(self):
         items = ocr.parse_receipt_text('Sofa Set 1,250.00')
         self.assertEqual(items[0]['price'], 1250.00)
@@ -140,13 +68,129 @@ class ReceiptTextParsingTests(unittest.TestCase):
 
     def test_empty_text_returns_no_items(self):
         self.assertEqual(ocr.parse_receipt_text(''), [])
+        self.assertEqual(ocr.parse_receipt_text(None), [])
 
-    def test_scan_receipt_falls_back_to_mock_when_ocr_unavailable(self):
-        # No real image on disk -> real OCR is skipped, mock is used and its
-        # prices reconcile to the transaction total.
-        items = ocr.scan_receipt('does-not-exist.jpg', target_amount=180.0,
-                                  description='Link Pharmacy')
-        self.assertEqual(round(sum(i['price'] for i in items), 2), 180.0)
+
+class ReceiptTotalTests(unittest.TestCase):
+    def test_grand_total_is_found(self):
+        text = ('Bread 25.00\nMilk 40.00\nSUBTOTAL 65.00\nVAT 10.40\n'
+                'TOTAL 75.40\nCASH 100.00\nCHANGE 24.60')
+        self.assertEqual(ocr.parse_receipt_total(text), 75.40)
+
+    def test_subtotal_vat_and_item_count_are_not_the_total(self):
+        text = 'SUB-TOTAL 65.00\nTOTAL VAT 10.40\nTOTAL ITEMS 2'
+        self.assertIsNone(ocr.parse_receipt_total(text))
+
+    def test_amount_due_counts_as_a_total(self):
+        self.assertEqual(ocr.parse_receipt_total('AMOUNT DUE K1,240.50'), 1240.50)
+
+    def test_no_total_line(self):
+        self.assertIsNone(ocr.parse_receipt_total('Bread 25.00'))
+
+
+class ScanErrorTests(unittest.TestCase):
+    """scan_receipt never makes items up: problems raise ReceiptScanError."""
+
+    def test_missing_file_raises(self):
+        with self.assertRaises(ocr.ReceiptScanError):
+            ocr.scan_receipt('does-not-exist.jpg')
+        with self.assertRaises(ocr.ReceiptScanError):
+            ocr.scan_receipt(None)
+
+    def test_missing_tesseract_raises_an_actionable_error(self):
+        with _temp_file(b'x', '.png') as path, \
+                mock.patch.object(ocr, 'find_tesseract', return_value=None):
+            with self.assertRaises(ocr.ReceiptScanError) as caught:
+                ocr.scan_receipt(path)
+        self.assertIn('Tesseract', str(caught.exception))
+
+    def test_unreadable_image_raises(self):
+        with _temp_file(b'definitely not an image', '.png') as path, \
+                mock.patch.object(ocr, 'find_tesseract', return_value='tesseract'):
+            with self.assertRaises(ocr.ReceiptScanError) as caught:
+                ocr.scan_receipt(path)
+        self.assertIn('could not be opened', str(caught.exception))
+
+    def test_pdf_without_poppler_raises(self):
+        with _temp_file(b'%PDF-1.4', '.pdf') as path, \
+                mock.patch.object(ocr, 'find_tesseract', return_value='tesseract'), \
+                mock.patch.object(ocr, 'find_poppler', return_value=None):
+            with self.assertRaises(ocr.ReceiptScanError) as caught:
+                ocr.scan_receipt(path)
+        self.assertIn('poppler', str(caught.exception))
+
+
+class _temp_file:
+    """A temporary file with the given bytes, deleted afterwards (Windows-safe)."""
+
+    def __init__(self, data, suffix):
+        self.data, self.suffix = data, suffix
+
+    def __enter__(self):
+        handle = tempfile.NamedTemporaryFile(suffix=self.suffix, delete=False)
+        handle.write(self.data)
+        handle.close()
+        self.path = handle.name
+        return self.path
+
+    def __exit__(self, *exc):
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+
+
+def _render_receipt(lines):
+    """Draw receipt text into a PNG the way a flatbed scan would look."""
+    from PIL import Image, ImageDraw, ImageFont
+    try:
+        font = ImageFont.truetype('consola.ttf', 28)
+    except OSError:
+        try:
+            font = ImageFont.truetype('DejaVuSansMono.ttf', 28)
+        except OSError:
+            font = ImageFont.load_default(size=28)
+    img = Image.new('RGB', (900, 60 + 44 * len(lines)), 'white')
+    draw = ImageDraw.Draw(img)
+    for row, line in enumerate(lines):
+        draw.text((40, 30 + 44 * row), line, fill='black', font=font)
+    handle = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+    handle.close()
+    img.save(handle.name)
+    return handle.name
+
+
+@unittest.skipUnless(ocr.find_tesseract(), 'Tesseract is not installed')
+class EndToEndOcrTests(unittest.TestCase):
+    """Real Tesseract on a rendered receipt."""
+
+    def test_rendered_receipt_is_itemised_and_totalled(self):
+        path = _render_receipt([
+            'SHOPRITE MANDA HILL',
+            'Bread 700g          25.00',
+            'Fresh Milk 2L       40.00',
+            'Eggs   2 x 27.50    55.00',
+            'SUBTOTAL           120.00',
+            'TOTAL              120.00',
+            'CASH               200.00',
+        ])
+        try:
+            scan = ocr.scan_receipt(path)
+        finally:
+            os.unlink(path)
+        names = [i['name'] for i in scan.items]
+        self.assertEqual(len(scan.items), 3, names)
+        self.assertEqual(scan.items_total, 120.00)
+        self.assertEqual(scan.total, 120.00)
+        self.assertEqual(scan.items[2]['quantity'], 2)
+
+    def test_blank_image_yields_no_items(self):
+        path = _render_receipt([])
+        try:
+            scan = ocr.scan_receipt(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(scan.items, [])
 
 
 class EmailReceiptFilterTests(unittest.TestCase):

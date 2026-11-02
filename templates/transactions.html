@@ -159,6 +159,10 @@ correction.</p>
                                     <input type="file" name="receipt" accept="image/*, .pdf, .heic" class="small receipt-input">
                                     <button type="submit" class="secondary small" title="Extract line items from receipt">Scan Receipt</button>
                                 </form>
+                                <details class="manual-items">
+                                    <summary class="small">or add items manually</summary>
+                                    {% with txn_id = txn['transaction_id'] %}{% include '_receipt_item_form.html' %}{% endwith %}
+                                </details>
                                 {% endif %}
                             {% endif %}
                         </div>
@@ -169,17 +173,33 @@ correction.</p>
                     <td colspan="7">
                         <div style="padding: 10px 20px;">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <strong>🧾 Itemized Receipt (OCR Extracted):</strong>
+                                <strong>🧾 Itemized Receipt:</strong>
                                 <form method="POST" action="{{ url_for('clear_receipt', transaction_id=txn['transaction_id']) }}" style="margin: 0;">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                                     <button type="submit" class="secondary small" style="background: transparent; border: 1px solid #ccc; color: #666;">Clear Receipt</button>
                                 </form>
                             </div>
-                            <ul style="margin-top: 5px; margin-bottom: 0;">
+                            <ul class="receipt-items">
                                 {% for item in items_by_txn[txn['transaction_id']] %}
-                                <li>{{ item.quantity }}x {{ item.item_name }} - {{ item.amount|money }} ZMW</li>
+                                <li>
+                                    <span>{{ item.quantity }}x {{ item.item_name }} - {{ item.amount|money }} ZMW</span>
+                                    <form method="POST" action="{{ url_for('delete_receipt_item', transaction_id=txn['transaction_id'], item_id=item.item_id) }}" class="inline-form">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                        <button type="submit" class="link-button" id="delete-item-{{ item.item_id }}" title="Remove this line" aria-label="Remove {{ item.item_name }}">&times;</button>
+                                    </form>
+                                </li>
                                 {% endfor %}
                             </ul>
+                            {% set items_total = items_by_txn[txn['transaction_id']]|sum(attribute='amount') %}
+                            {% set difference = (txn['amount'] - items_total)|round(2) %}
+                            <p class="small {% if difference != 0 %}receipt-mismatch{% else %}muted{% endif %}">
+                                Items total {{ items_total|money }} of {{ txn['amount']|money }} ZMW
+                                {% if difference > 0 %}({{ difference|money }} not itemised){% elif difference < 0 %}({{ (-difference)|money }} over the transaction){% endif %}
+                            </p>
+                            <details class="manual-items">
+                                <summary class="small">Add a missing item</summary>
+                                {% with txn_id = txn['transaction_id'] %}{% include '_receipt_item_form.html' %}{% endwith %}
+                            </details>
                         </div>
                     </td>
                 </tr>

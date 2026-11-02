@@ -392,32 +392,139 @@ class NewFeatureTests(RouteTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("couldn't quite catch", response.get_json()['answer'])
 
-    def test_auto_fetch_itemises_recent_transactions(self):
-        response = self.client.post('/auto-fetch-receipts', follow_redirects=True)
+    def test_auto_fetch_without_imap_credentials_reports_setup_and_adds_nothing(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {'IMAP_EMAIL': '', 'IMAP_PASSWORD': ''}):
+            response = self.client.post('/auto-fetch-receipts', follow_redirects=True)
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Auto-Fetch Complete', response.data)
+        self.assertIn(b'not set up', response.data)
+        self.assertEqual(self._receipt_item_count(), 0)
+
+    def test_auto_fetch_itemises_only_receipts_it_actually_found(self):
+        # The fetcher searches only merchants that email receipts, itemises only
+        # those whose attachment was found and read, and never invents items.
+        from unittest import mock
+        from services import ocr
+
+        found = []
+
+        def fake_fetch(mail, keyword, days_back=7):
+            if found:
+                return None  # only the first merchant has an email receipt
+            handle = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            handle.close()
+            found.append(keyword)
+            return handle.name
+
+        scanned = ocr.ReceiptScan(items=[
+            {'name': 'Real Line', 'price': 12.5, 'quantity': 1}], total=12.5)
+        with mock.patch.dict(os.environ, {'IMAP_EMAIL': 'me@example.com',
+                                          'IMAP_PASSWORD': 'secret'}), \
+                mock.patch('services.imap_fetcher.connect_imap',
+                           return_value=mock.Mock()), \
+                mock.patch('services.imap_fetcher.fetch_receipt_attachment',
+                           side_effect=fake_fetch), \
+                mock.patch('services.ocr.scan_receipt', return_value=scanned):
+            response = self.client.post('/auto-fetch-receipts', follow_redirects=True)
+
+        self.assertIn(b'Itemised 1 emailed receipt', response.data)
+        import database
+        conn = database.get_db_connection()
+        rows = conn.execute(
+            'SELECT t.description, r.item_name FROM Receipt_Item r '
+            'JOIN Transaction_Record t ON r.transaction_id = t.transaction_id'
+        ).fetchall()
+        conn.close()
+        self.assertEqual([r['item_name'] for r in rows], ['Real Line'])
+        self.assertTrue(ocr.emails_receipt(rows[0]['description']))
+
+    def _receipt_item_count(self):
         import database
         conn = database.get_db_connection()
         n = conn.execute('SELECT COUNT(*) AS n FROM Receipt_Item').fetchone()['n']
         conn.close()
-        self.assertGreater(n, 0)
+        return n
 
-    def test_auto_fetch_only_itemises_email_receipt_merchants(self):
-        # The fetcher must skip cash/fuel/utility merchants and only itemise
-        # transactions from merchants that email a digital receipt.
-        from services import ocr
-        self.client.post('/auto-fetch-receipts', follow_redirects=True)
+    def _a_debit(self):
         import database
         conn = database.get_db_connection()
-        itemised = conn.execute(
-            'SELECT DISTINCT t.description FROM Receipt_Item r '
-            'JOIN Transaction_Record t ON r.transaction_id = t.transaction_id'
-        ).fetchall()
+        row = conn.execute(
+            "SELECT transaction_id, amount FROM Transaction_Record "
+            "WHERE transaction_type = 'DEBIT' AND is_subscription = 0 "
+            "ORDER BY transaction_id LIMIT 1").fetchone()
         conn.close()
-        self.assertGreater(len(itemised), 0)
-        for row in itemised:
-            with self.subTest(merchant=row['description']):
-                self.assertTrue(ocr.emails_receipt(row['description']))
+        return row['transaction_id'], float(row['amount'])
+
+    def _upload(self, txn_id):
+        return self.client.post(f'/transactions/{txn_id}/receipt', data={
+            'receipt': (io.BytesIO(b'not really an image'), 'receipt.png'),
+        }, content_type='multipart/form-data', follow_redirects=True)
+
+    def test_receipt_scan_failure_is_reported_and_adds_no_items(self):
+        from unittest import mock
+        from services import ocr
+        txn_id, _ = self._a_debit()
+        with mock.patch('services.ocr.scan_receipt',
+                        side_effect=ocr.ReceiptScanError('Tesseract OCR is not installed.')):
+            response = self._upload(txn_id)
+        self.assertIn(b'Tesseract OCR is not installed.', response.data)
+        self.assertIn(b'add the items manually', response.data)
+        self.assertEqual(self._receipt_item_count(), 0)
+
+    def test_receipt_with_no_readable_lines_adds_no_items(self):
+        from unittest import mock
+        from services import ocr
+        txn_id, _ = self._a_debit()
+        with mock.patch('services.ocr.scan_receipt', return_value=ocr.ReceiptScan()):
+            response = self._upload(txn_id)
+        self.assertIn(b'No priced items could be read', response.data)
+        self.assertEqual(self._receipt_item_count(), 0)
+
+    def test_receipt_scan_stores_items_and_flags_a_short_total(self):
+        from unittest import mock
+        from services import ocr
+        txn_id, amount = self._a_debit()
+        scan = ocr.ReceiptScan(items=[
+            {'name': 'Bread', 'price': 1.0, 'quantity': 1}], total=amount)
+        with mock.patch('services.ocr.scan_receipt', return_value=scan):
+            response = self._upload(txn_id)
+        self.assertIn(b'1 item(s) extracted', response.data)
+        self.assertIn(b'Some lines may have been missed', response.data)
+        self.assertEqual(self._receipt_item_count(), 1)
+
+    def test_manual_item_can_be_added_and_deleted(self):
+        txn_id, _ = self._a_debit()
+        response = self.client.post(f'/transactions/{txn_id}/receipt/items', data={
+            'item_name': 'Cooking Oil 2L', 'quantity': '2', 'amount': '170.00',
+        }, follow_redirects=True)
+        self.assertIn(b'Cooking Oil 2L', response.data)
+        import database
+        conn = database.get_db_connection()
+        item = conn.execute('SELECT * FROM Receipt_Item').fetchone()
+        conn.close()
+        self.assertEqual((item['quantity'], item['amount']), (2, 170.0))
+
+        self.client.post(
+            f"/transactions/{txn_id}/receipt/items/{item['item_id']}/delete")
+        self.assertEqual(self._receipt_item_count(), 0)
+
+    def test_manual_item_rejects_invalid_input(self):
+        txn_id, _ = self._a_debit()
+        for data in ({'item_name': '', 'amount': '10'},
+                     {'item_name': 'Milk', 'amount': 'abc'},
+                     {'item_name': 'Milk', 'amount': '-5'},
+                     {'item_name': 'Milk', 'amount': '5', 'quantity': '0'}):
+            with self.subTest(data=data):
+                self.client.post(f'/transactions/{txn_id}/receipt/items',
+                                 data=data, follow_redirects=True)
+                self.assertEqual(self._receipt_item_count(), 0)
+
+    def test_receipt_item_routes_404_for_unknown_transaction_or_item(self):
+        txn_id, _ = self._a_debit()
+        self.assertEqual(self.client.post('/transactions/999999/receipt/items', data={
+            'item_name': 'Milk', 'amount': '5'}).status_code, 404)
+        self.assertEqual(self.client.post(
+            f'/transactions/{txn_id}/receipt/items/999999/delete').status_code, 404)
 
     def test_bank_sync_is_idempotent_within_a_day(self):
         first = self.client.post('/sync-bank', follow_redirects=True)

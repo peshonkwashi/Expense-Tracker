@@ -80,6 +80,38 @@
 </div>
 
 <div class="card">
+    <h2>Receipt scanning</h2>
+    <table style="font-size:.9rem;">
+        <tr><td>Tesseract OCR</td>
+            <td class="num">
+                {% if ocr_status.tesseract %}
+                    <span class="badge ok">installed</span>
+                {% else %}
+                    <span class="badge warning">not found</span>
+                {% endif %}
+            </td></tr>
+        <tr><td>PDF receipts (poppler)</td>
+            <td class="num">
+                {% if ocr_status.pdf %}
+                    <span class="badge ok">supported</span>
+                {% else %}
+                    <span class="badge warning">images only</span>
+                {% endif %}
+            </td></tr>
+    </table>
+    {% if ocr_status.tesseract %}
+    <p class="muted" style="margin-top:.6rem;">Uploaded receipts are read with real
+    OCR. If a scan reads nothing, you can enter the items by hand on the
+    Transactions screen.</p>
+    {% else %}
+    <p class="muted" style="margin-top:.6rem;">Install Tesseract to scan receipts
+    (<code>winget install UB-Mannheim.TesseractOCR</code>), or set
+    <code>TESSERACT_CMD</code>. Until then, add receipt items manually on the
+    Transactions screen.</p>
+    {% endif %}
+</div>
+
+<div class="card">
     <h2>Your data</h2>
     <p>All of your data lives in one file on this computer:</p>
     <p class="muted" style="word-break:break-all;"><code>{{ db_path }}</code></p>
@@ -125,7 +157,7 @@
     <div class="split" style="align-items: center;">
         <div style="max-width: 600px;">
             <h3 style="margin:0;">Email Receipt Auto-Fetcher</h3>
-            <p class="muted" style="margin-top: 0.5rem;">Connect your inbox to automatically match digital receipts (like Uber, Amazon, and food delivery) to your bank transactions and extract line items without manual scanning. (Mocked)</p>
+            <p class="muted" style="margin-top: 0.5rem;">Searches your inbox for receipt attachments from merchants that email them (like Uber, Amazon, and food delivery), reads them with OCR and adds the line items to the matching transactions. Requires the <code>IMAP_EMAIL</code> and <code>IMAP_PASSWORD</code> environment variables (for Gmail, an app password).</p>
         </div>
         <form method="POST" action="{{ url_for('auto_fetch_receipts') }}" style="margin: 0;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>

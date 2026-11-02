@@ -817,28 +817,115 @@ def upload_receipt(transaction_id):
         upload_path = os.path.join(config.UPLOAD_FOLDER, stamped)
         file.save(upload_path)
 
+        from services.ocr import ReceiptScanError, scan_receipt
         try:
-            from services.ocr import scan_receipt
-            items = scan_receipt(upload_path, target_amount=float(txn['amount']),
-                                 category=txn['category_name'],
-                                 description=txn['description'])
-            if items:
-                for item in items:
-                    conn.execute(
-                        'INSERT INTO Receipt_Item (transaction_id, item_name, '
-                        'amount, quantity) VALUES (?, ?, ?, ?)',
-                        (transaction_id, item['name'], item['price'],
-                         item['quantity']))
-                conn.commit()
-                flash(f'Receipt scanned — {len(items)} item(s) extracted.',
-                      'success')
-            else:
-                flash('No items could be read from that receipt.', 'warning')
+            scan = scan_receipt(upload_path)
+        except ReceiptScanError as exc:
+            flash(f'Receipt could not be scanned: {exc} You can add the '
+                  'items manually instead.', 'error')
+            return redirect(url_for('transactions'))
         finally:
             try:
                 os.remove(upload_path)
             except OSError:
                 pass
+
+        if not scan.items:
+            flash('No priced items could be read from that receipt. Try a '
+                  'sharper, well-lit photo taken straight on, or add the items '
+                  'manually.', 'warning')
+            return redirect(url_for('transactions'))
+
+        _insert_receipt_items(conn, transaction_id, scan.items)
+        conn.commit()
+        flash(f'Receipt scanned: {len(scan.items)} item(s) extracted.', 'success')
+        mismatch = _receipt_mismatch(scan, float(txn['amount']))
+        if mismatch:
+            flash(mismatch, 'warning')
+        return redirect(url_for('transactions'))
+    finally:
+        conn.close()
+
+
+def _insert_receipt_items(conn, transaction_id, items):
+    for item in items:
+        conn.execute(
+            'INSERT INTO Receipt_Item (transaction_id, item_name, amount, '
+            'quantity) VALUES (?, ?, ?, ?)',
+            (transaction_id, item['name'], item['price'], item['quantity']))
+
+
+def _receipt_mismatch(scan, transaction_amount):
+    """A warning when the scan doesn't add up, or None when it does.
+
+    OCR can drop or misread lines, so the extracted items are checked against
+    the receipt's printed total and the transaction amount, telling the user
+    when to review the items.
+    """
+    tolerance = 0.01
+    if scan.total is not None and abs(scan.total - transaction_amount) > tolerance:
+        return (f'The receipt total ({scan.total:,.2f}) does not match this '
+                f'transaction ({transaction_amount:,.2f}). Check that this is '
+                'the right receipt.')
+    expected = scan.total if scan.total is not None else transaction_amount
+    if abs(scan.items_total - expected) > tolerance:
+        return (f'The extracted items add up to {scan.items_total:,.2f} but the '
+                f'receipt is for {expected:,.2f}. Some lines may have been '
+                'missed or misread; review the items below.')
+    return None
+
+
+@app.route('/transactions/<int:transaction_id>/receipt/items', methods=('POST',))
+@security.login_required
+def add_receipt_item(transaction_id):
+    """Add one receipt line by hand (when OCR fails or misses a line)."""
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        txn = conn.execute(
+            'SELECT transaction_id FROM Transaction_Record '
+            'WHERE transaction_id = ? AND user_id = ?',
+            (transaction_id, user['user_id'])).fetchone()
+        if not txn:
+            abort(404)
+
+        name = (request.form.get('item_name') or '').strip()[:60]
+        try:
+            amount = round(float(request.form.get('amount', '')), 2)
+            quantity = int(request.form.get('quantity') or 1)
+        except ValueError:
+            amount, quantity = None, None
+        if (not name or amount is None or not 0 < amount <= 100000
+                or not 1 <= quantity <= 999):
+            flash('Enter an item name, an amount between 0 and 100,000, and a '
+                  'quantity of at least 1.', 'error')
+            return redirect(url_for('transactions'))
+
+        _insert_receipt_items(conn, transaction_id, [
+            {'name': name, 'price': amount, 'quantity': quantity}])
+        conn.commit()
+        flash(f'Added "{name}" to the receipt.', 'success')
+        return redirect(url_for('transactions'))
+    finally:
+        conn.close()
+
+
+@app.route('/transactions/<int:transaction_id>/receipt/items/<int:item_id>/delete',
+           methods=('POST',))
+@security.login_required
+def delete_receipt_item(transaction_id, item_id):
+    """Remove one misread receipt line."""
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        deleted = conn.execute(
+            'DELETE FROM Receipt_Item WHERE item_id = ? AND transaction_id IN '
+            '(SELECT transaction_id FROM Transaction_Record '
+            ' WHERE transaction_id = ? AND user_id = ?)',
+            (item_id, transaction_id, user['user_id'])).rowcount
+        if not deleted:
+            abort(404)
+        conn.commit()
         return redirect(url_for('transactions'))
     finally:
         conn.close()
@@ -1097,18 +1184,34 @@ def leave_household():
         conn.close()
 
 
-# --- Auto-Fetch Receipts Mock ----------------------------------------------
+# --- Auto-Fetch Receipts ---------------------------------------------------
 
 @app.route('/auto-fetch-receipts', methods=['POST'])
 @security.login_required
 def auto_fetch_receipts():
+    """Pull receipt attachments from the user's inbox over IMAP and OCR them.
+
+    Only receipts that are actually found and read are itemised; a transaction
+    with no matching email, or whose attachment cannot be scanned, is left
+    alone rather than given made-up items.
+    """
     _demo_only()
     import os
+    email_address = os.environ.get('IMAP_EMAIL')
+    app_password = os.environ.get('IMAP_PASSWORD')
+    if not (email_address and app_password):
+        flash('Email receipt fetching is not set up. Set the IMAP_EMAIL and '
+              'IMAP_PASSWORD environment variables (for Gmail, use an app '
+              'password) and restart the app.', 'error')
+        return redirect(url_for('transactions'))
+
     conn = database.get_db_connection()
     try:
         user = database.get_user(conn)
         
-        from services.ocr import scan_receipt, emails_receipt, EMAIL_RECEIPT_MERCHANTS
+        from services.ocr import (ReceiptScanError, scan_receipt, emails_receipt,
+                                  EMAIL_RECEIPT_MERCHANTS)
+        from services.imap_fetcher import connect_imap, fetch_receipt_attachment
         
         query = """
             SELECT t.transaction_id, t.description, t.amount, c.category_name, t.transaction_date
@@ -1124,68 +1227,68 @@ def auto_fetch_receipts():
         """
         unitemized = conn.execute(query, (user['user_id'],)).fetchall()
         
-        # Filter down to just transactions that actually email receipts based on the new keywords
+        # Only merchants that email a digital receipt are worth searching for.
         eligible = [txn for txn in unitemized if emails_receipt(txn['description'])]
         
         if not eligible:
-            flash("Scanned your inbox, but couldn't find any new digital receipts.", "info")
+            flash("No recent transactions are from merchants that email receipts.", "info")
             return redirect(url_for('transactions'))
-            
-        # 2. Attempt real IMAP connection if credentials are provided in environment
-        mail = None
-        email_address = os.environ.get('IMAP_EMAIL')
-        app_password = os.environ.get('IMAP_PASSWORD')
-        
-        if email_address and app_password:
-            try:
-                from services.imap_fetcher import connect_imap
-                mail = connect_imap(email_address, app_password)
-            except Exception as e:
-                print(f"[IMAP] Connection failed: {e}")
-        
-        from services.imap_fetcher import fetch_receipt_attachment
-        
-        merchant_names = []
-        for txn in eligible:
-            # Find which keyword matched
-            desc_lower = txn['description'].lower()
-            keyword = next((kw for kw in EMAIL_RECEIPT_MERCHANTS if kw in desc_lower), desc_lower)
-            
-            temp_path = None
-            if mail:
+
+        try:
+            mail = connect_imap(email_address, app_password)
+        except Exception as e:
+            print(f"[IMAP] Connection failed: {e}")
+            flash('Could not sign in to your mailbox. Check IMAP_EMAIL and '
+                  'IMAP_PASSWORD.', 'error')
+            return redirect(url_for('transactions'))
+
+        itemised, not_found, unreadable = [], 0, []
+        try:
+            for txn in eligible:
+                desc_lower = txn['description'].lower()
+                keyword = next((kw for kw in EMAIL_RECEIPT_MERCHANTS if kw in desc_lower), desc_lower)
+
                 try:
                     temp_path = fetch_receipt_attachment(mail, keyword, days_back=14)
                 except Exception as e:
                     print(f"[IMAP] Failed to fetch {keyword}: {e}")
-            
-            # If we fetched a real PDF/image, scan_receipt will OCR it. 
-            # If temp_path is None, it gracefully falls back to the mock generator.
-            items = scan_receipt(temp_path, target_amount=txn['amount'], category=txn['category_name'], description=txn['description'])
-            
-            for item in items:
-                conn.execute('INSERT INTO Receipt_Item (transaction_id, item_name, amount, quantity) VALUES (?, ?, ?, ?)',
-                             (txn['transaction_id'], item['name'], item['price'], item['quantity']))
-                             
-            # Clean up the temp file if we created one
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
-                
-            merchant_names.append(txn['description'])
-            
-        if mail:
+                    temp_path = None
+                if not temp_path:
+                    not_found += 1
+                    continue
+
+                try:
+                    scan = scan_receipt(temp_path)
+                except ReceiptScanError as e:
+                    print(f"[OCR] {txn['description']}: {e}")
+                    scan = None
+                finally:
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+
+                if not scan or not scan.items:
+                    unreadable.append(txn['description'])
+                    continue
+                _insert_receipt_items(conn, txn['transaction_id'], scan.items)
+                itemised.append(txn['description'])
+        finally:
             try:
                 mail.logout()
             except Exception:
                 pass
 
         conn.commit()
-        
-        merchants_str = ", ".join(merchant_names)
-        if email_address and app_password:
-            flash(f"Auto-Fetch Complete via IMAP! Found {len(eligible)} digital receipts ({merchants_str}) and itemized them.", "success")
-        else:
-            flash(f"Auto-Fetch Complete (Mocked)! Found {len(eligible)} digital receipts ({merchants_str}). Set IMAP_EMAIL to use real inbox scanning.", "success")
-            
+
+        if itemised:
+            flash(f"Itemised {len(itemised)} emailed receipt(s): {', '.join(itemised)}.", "success")
+        if unreadable:
+            flash(f"Found but could not read receipts for: {', '.join(unreadable)}. "
+                  "Add those items manually.", "warning")
+        if not itemised and not unreadable:
+            flash(f"Searched your inbox for {not_found} transaction(s) but found no "
+                  "receipt attachments from the last 14 days.", "info")
     finally:
         conn.close()
         
@@ -1196,6 +1299,7 @@ def auto_fetch_receipts():
 @app.route('/settings')
 @security.login_required
 def settings():
+    from services.ocr import ocr_status
     conn = get_db_connection()
     try:
         user = database.get_user(conn)
@@ -1204,7 +1308,7 @@ def settings():
             categorisation=database.latest_metric(conn, 'CATEGORISATION'),
             forecasting_metric=database.latest_metric(conn, 'FORECASTING'),
             target_f1=config.TARGET_F1, max_mae_ratio=config.MAX_MAE_RATIO,
-            db_path=config.DATABASE_PATH)
+            db_path=config.DATABASE_PATH, ocr_status=ocr_status())
     finally:
         conn.close()
 

@@ -28,13 +28,18 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {'.csv'}
 
 # --- Receipt OCR (scan-receipt feature) -----------------------------------
-# Image/PDF types accepted for a receipt scan. Falls back to the mock if the
-# real OCR stack (Tesseract, poppler) is unavailable.
+# Image/PDF types accepted for a receipt scan. Scanning needs the real OCR
+# stack (Tesseract, plus poppler for PDFs); if it is missing the scan reports a
+# clear error and the user can enter the items manually.
 ALLOWED_RECEIPT_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp',
                               '.tiff', '.heic', '.pdf'}
 # Path to the Tesseract binary when it is not on PATH (common on Windows, e.g.
-# 'C:/Program Files/Tesseract-OCR/tesseract.exe'). Environment overrides this.
+# 'C:/Program Files/Tesseract-OCR/tesseract.exe'). If unset, PATH and the
+# standard Windows install locations are searched.
 TESSERACT_CMD = os.environ.get('TESSERACT_CMD')
+# Folder containing poppler's pdftoppm/pdfinfo, needed only for PDF receipts.
+# If unset, PATH and the winget install location are searched.
+POPPLER_PATH = os.environ.get('POPPLER_PATH')
 
 # --- Ingestion validation (FR-01) -----------------------------------------
 # Sanity bounds on individual rows. A statement with a typo'd year or a
