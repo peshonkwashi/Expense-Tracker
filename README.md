@@ -87,6 +87,11 @@ the 0.85 F1 target, the 15% MAE ceiling — is defined once in `config.py`.
 
 ## Where the requirements are implemented
 
+The full requirements traceability matrix — every FR and NFR mapped to its
+implementation, its verifying test, and the acceptance-criteria evidence — is in
+[`docs/traceability.md`](docs/traceability.md). The summary below is the
+functional side of it.
+
 | ID | Requirement | Implementation |
 |---|---|---|
 | FR-01 | Transaction import | `services/ingestion.py` — column aliases, per-row validation, SHA-256 dedup |
@@ -247,12 +252,17 @@ labels and weighted more heavily during training.
   filters on it, but the UI assumes one profile per database file.
 - **Password recovery does not exist.** By design — there is no server to
   recover from. The Settings screen offers a database backup instead.
-- **Receipt OCR is optional and degrades gracefully.** Scanning a receipt uses
-  Tesseract (`requirements-ocr.txt`, plus the Tesseract binary and poppler for
-  PDFs). When any of that is missing, or OCR reads nothing usable, the feature
-  falls back to a scenario-based mock so it always returns something. If
-  Tesseract is installed but not on PATH (common on Windows), set the
-  `TESSERACT_CMD` environment variable to the binary's path.
+- **Receipt scanning uses real OCR, with a manual fallback.** Scanning a receipt
+  reads it with Tesseract (`requirements-ocr.txt`, plus the Tesseract binary and,
+  for PDF receipts, poppler). No items are ever invented: if the OCR stack is
+  missing or the image cannot be read, the scan reports a clear, actionable
+  error; if it runs but finds no priced lines, it says so. Either way the user
+  can type the line items in by hand (and can delete any line OCR misread). The
+  extracted items are reconciled against the receipt's printed total and the
+  transaction amount, and a mismatch is flagged. On Windows the binaries install
+  with `winget install UB-Mannheim.TesseractOCR` and
+  `winget install oschwartz10612.Poppler`, and are found on PATH or in their
+  standard install locations; otherwise set `TESSERACT_CMD` / `POPPLER_PATH`.
 
 ---
 
@@ -276,7 +286,7 @@ services/
   behavioural.py          Learning phase, salary-cycle analysis (FR-05)
   recommendation.py       Budgets, nudges, savings, reports (FR-07/09/11/12)
   insights.py             Smart Suggestions engine (dashboard)
-  ocr.py                  Mock OCR for the scan-receipt feature
+  ocr.py                  Tesseract OCR for the scan-receipt feature
 templates/                Jinja2 templates, one per screen
 static/                   Stylesheet and chart rendering
 notebooks/                Reproducible model-evaluation notebook
