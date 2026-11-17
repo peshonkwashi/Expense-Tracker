@@ -6,6 +6,7 @@ a template. Business logic lives in those modules so that each layer can be
 tested and replaced independently (NFR-07).
 """
 import os
+import threading
 from datetime import date, datetime, timedelta
 
 from flask import (Flask, abort, flash, redirect, render_template, request,
@@ -67,21 +68,31 @@ def login():
             return redirect(url_for('setup'))
 
         if request.method == 'POST':
+            client = request.remote_addr or 'local'
+            # Checked before the password so a locked-out client cannot keep
+            # guessing (and does not even pay for a hash comparison).
+            wait = security.login_lockout_remaining(client)
+            if wait:
+                flash(f'Too many incorrect attempts. Try again in {wait} '
+                      'seconds.', 'error')
+                return render_template('login.html'), 429
             if security.verify_password(conn, request.form.get('password')):
+                security.reset_login_attempts(client)
                 security.start_session()
-                destination = request.args.get('next')
-                # Only allow same-site relative redirects.
-                if destination and destination.startswith('/'):
-                    return redirect(destination)
-                return redirect(url_for('dashboard'))
+                # Only same-site relative paths: '//host' is rejected too.
+                destination = security.safe_next(request.args.get('next'))
+                return redirect(destination or url_for('dashboard'))
+            security.record_failed_login(client)
             flash('Incorrect password.', 'error')
         return render_template('login.html')
     finally:
         conn.close()
 
 
-@app.route('/logout')
+@app.route('/logout', methods=('POST',))
 def logout():
+    # POST-only with a CSRF token: as a GET link, any web page could sign the
+    # user out with something as simple as <img src="/logout">.
     session.clear()
     flash('You have been signed out.', 'info')
     return redirect(url_for('login'))
@@ -160,7 +171,11 @@ def setup():
 @app.before_request
 def require_setup():
     """Send a fresh installation to setup before anything else."""
-    if request.endpoint in {'setup', 'login', 'static', None}:
+    # The PWA service worker and offline page are public infrastructure: a
+    # browser fetches /sw.js with no session, and /offline must render even when
+    # unauthenticated, so neither is redirected to setup.
+    if request.endpoint in {'setup', 'login', 'static',
+                            'service_worker', 'offline', None}:
         return None
     conn = get_db_connection()
     try:
@@ -201,8 +216,14 @@ def _dashboard_context(conn, user):
 @app.route('/ask-assistant', methods=['POST'])
 @security.login_required
 def ask_assistant():
+    """Mock assistant. The answer is returned as an HTML fragment (for the
+    <strong> emphasis), so every user-controlled string interpolated into it —
+    category names (users can create their own) and savings-goal names — is
+    HTML-escaped first; otherwise a category named <img src=x onerror=...>
+    would run script in the dashboard (stored XSS)."""
     from flask import jsonify
     from datetime import date
+    from markupsafe import escape
     _demo_only()
     conn = database.get_db_connection()
     try:
@@ -221,6 +242,8 @@ def ask_assistant():
             if c in question:
                 matched_cat = c
                 break
+        # Display form of the matched category, escaped for the HTML answer.
+        cat_label = escape(matched_cat.title()) if matched_cat else ''
         
         # 2. Logic Tree
         if 'budget' in question or 'limit' in question or 'allocate' in question:
@@ -233,9 +256,9 @@ def ask_assistant():
                 if matched_cat:
                     cat_budget = next((row for row in budget['rows'] if row['category'].lower() == matched_cat), None)
                     if cat_budget:
-                        response_text = f"Your recommended budget for **{cat_budget['category']}** is <strong>{cat_budget['recommended']:,.2f}</strong>. You have spent <strong>{cat_budget['spent']:,.2f}</strong> so far."
+                        response_text = f"Your recommended budget for <strong>{escape(cat_budget['category'])}</strong> is <strong>{cat_budget['recommended']:,.2f}</strong>. You have spent <strong>{cat_budget['spent']:,.2f}</strong> so far."
                     else:
-                        response_text = f"You don't have a specific budget allocation for {matched_cat.title()}."
+                        response_text = f"You don't have a specific budget allocation for {cat_label}."
                 else:
                     response_text = f"Your total recommended spending budget this month is <strong>{budget['allocated_total']:,.2f}</strong>, and your savings target is <strong>{budget['recommended_savings']:,.2f}</strong>."
 
@@ -252,11 +275,11 @@ def ask_assistant():
                 if cat_fc:
                     response_text = (f"I forecast you'll spend about "
                                      f"<strong>{cat_fc['amount']:,.2f}</strong> on "
-                                     f"<strong>{matched_cat.title()}</strong> next month "
+                                     f"<strong>{cat_label}</strong> next month "
                                      f"({cat_fc['method']}).")
                 else:
                     response_text = (f"I don't have enough history to forecast "
-                                     f"{matched_cat.title()} yet.")
+                                     f"{cat_label} yet.")
             else:
                 total_fc = sum(f['amount'] for f in forecasts.values())
                 response_text = (f"Based on your spending history, I forecast about "
@@ -270,7 +293,7 @@ def ask_assistant():
                                  "Savings Goals page and I'll track your progress here.")
             else:
                 parts = [
-                    (f"<strong>{g['goal_name']}</strong> is {g['progress']:.0f}% funded"
+                    (f"<strong>{escape(g['goal_name'])}</strong> is {g['progress']:.0f}% funded"
                      f" ({g['monthly_required']:,.2f}/month still needed"
                      f"{' — overdue' if g['overdue'] else ''})")
                     for g in goals[:3]
@@ -308,7 +331,7 @@ def ask_assistant():
                 (user['user_id'], matched_cat, month_str)
             ).fetchone()
             total = row['total'] or 0.0
-            response_text = f"You have spent <strong>{total:,.2f}</strong> on <strong>{matched_cat.title()}</strong> this month."
+            response_text = f"You have spent <strong>{total:,.2f}</strong> on <strong>{cat_label}</strong> this month."
             
         elif 'total' in question or 'all' in question or ('how much' in question and 'spent' in question):
             row = conn.execute(
@@ -1327,6 +1350,9 @@ def _retrain_and_evaluate(conn, user_id):
         relabelled = categorization.recategorise_uncategorised(conn, user_id)
     evaluation = forecasting.backtest(conn, user_id)
     subscriptions.detect_subscriptions(conn, user_id)
+    # A correction may have relabelled transactions, which changes the forecast
+    # inputs; drop the memoised forecasts so the next page recomputes.
+    forecasting.reset_forecast_cache()
     return result, relabelled, evaluation
 
 
@@ -1398,6 +1424,22 @@ def export_database():
                      download_name=f'expense_tracker-backup-{stamp}.db')
 
 
+@app.route('/sw.js')
+def service_worker():
+    """Serve the PWA Service Worker from the root path so its scope covers '/'."""
+    response = send_file(os.path.join(app.static_folder, 'sw.js'),
+                         mimetype='application/javascript')
+    response.headers['Service-Worker-Allowed'] = '/'
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
+
+@app.route('/offline')
+def offline():
+    """Offline fallback screen pre-cached by the PWA Service Worker."""
+    return render_template('offline.html')
+
+
 @app.errorhandler(413)
 def too_large(_error):
     flash(f'That file is larger than the '
@@ -1405,9 +1447,47 @@ def too_large(_error):
     return redirect(url_for('transactions')), 413
 
 
+def _warm_forecast_cache():
+    """Pre-compute the forecasts once at startup so the first page a user opens
+    is served from cache (NFR-01).
+
+    The first forecast of a fresh process also pays a one-off cost importing the
+    scientific stack (statsmodels/scikit-learn) and fitting every category's
+    model. Doing it here, off the request path, keeps every user-facing page
+    load well under the three-second target. It runs in a daemon thread so the
+    server still starts accepting connections immediately, and it is best-effort:
+    any failure (e.g. no user set up yet) is swallowed and the forecast simply
+    computes lazily on first use instead.
+    """
+    try:
+        conn = database.get_db_connection()
+        try:
+            user = database.get_user(conn)
+            if user is not None:
+                forecasting.generate_forecasts(conn, user['user_id'])
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
 if __name__ == '__main__':
     init_db()
-    # Local-only by design (section 5.9): bound to the loopback interface so the
-    # dashboard is not reachable from other machines on the network.
-    app.run(host='127.0.0.1', port=int(os.environ.get('PORT', 5000)),
-            debug=os.environ.get('FLASK_DEBUG') == '1')
+    threading.Thread(target=_warm_forecast_cache, daemon=True).start()
+    # Local-only by default (section 5.9): bound to 127.0.0.1 unless FLASK_HOST
+    # is set (e.g. FLASK_HOST=0.0.0.0 to reach the PWA from a mobile phone on
+    # the same Wi-Fi network). Set FLASK_SSL=adhoc for local HTTPS when testing
+    # PWA installation over LAN.
+    host = os.environ.get('FLASK_HOST', '127.0.0.1')
+    ssl_mode = os.environ.get('FLASK_SSL', '').strip().lower()
+    ssl_ctx = 'adhoc' if ssl_mode in ('1', 'true', 'adhoc') else None
+    # SSL_CERT/SSL_KEY: a certificate pair the phone actually trusts (the mkcert
+    # path in docs/mobile-install.md). Browsers only register the PWA service
+    # worker over HTTPS with a trusted certificate — an ad-hoc self-signed one
+    # is not trusted, so this is the route that makes Wi-Fi install work.
+    ssl_cert, ssl_key = os.environ.get('SSL_CERT'), os.environ.get('SSL_KEY')
+    if ssl_cert and ssl_key:
+        ssl_ctx = (ssl_cert, ssl_key)
+    app.run(host=host, port=int(os.environ.get('PORT', 5000)),
+            debug=os.environ.get('FLASK_DEBUG') == '1',
+            ssl_context=ssl_ctx)

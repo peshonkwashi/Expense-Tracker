@@ -27,6 +27,7 @@ estimator: it smooths the *size* of spend events and the *interval* between them
 separately, and forecasts size/interval. It is added as another CV-selected
 candidate, so it is only used where it actually reduces the measured error.
 """
+import hashlib
 import warnings
 
 import numpy as np
@@ -50,6 +51,44 @@ MONTHLY_SPEND_QUERY = (
 def current_month(today=None):
     today = today or pd.Timestamp.today()
     return pd.Timestamp(today).to_period('M')
+
+
+# In-process forecast cache (NFR-01). Forecasting runs ARIMA/Croston model
+# selection for every category and dominates the render time of each page that
+# shows a budget — the dashboard, the budget page and the savings page all reach
+# it through recommendation.build_budget(). The result changes only when the
+# underlying spending changes or the calendar rolls into a new month, so it is
+# memoised per user against a signature of exactly those inputs. A stale result
+# can never be served: every edit to a forecastable (DEBIT, non-salary) row —
+# add, delete, amount, date or category reassignment — changes the signature, as
+# does the month boundary that moves the in-progress-month cut-off.
+_FORECAST_CACHE = {}
+
+_SIGNATURE_QUERY = (
+    "SELECT transaction_id, category_id, amount, transaction_date "
+    "FROM Transaction_Record "
+    "WHERE transaction_type = 'DEBIT' AND is_salary = 0 AND user_id = ? "
+    "ORDER BY transaction_id"
+)
+
+
+def reset_forecast_cache():
+    """Drop every memoised forecast. Used by tests and after a retrain."""
+    _FORECAST_CACHE.clear()
+
+
+def _forecast_signature(conn, user_id, today=None):
+    """A cheap hash of exactly the inputs a forecast depends on.
+
+    Reading and hashing a few hundred rows is sub-millisecond next to the
+    seconds of model fitting it guards, so it is computed on every call rather
+    than trusting a coarser change counter.
+    """
+    digest = hashlib.md5()
+    for row in conn.execute(_SIGNATURE_QUERY, (user_id,)):
+        digest.update(repr((row[0], row[1], float(row[2]), row[3])).encode())
+    digest.update(str(current_month(today)).encode())
+    return digest.hexdigest()
 
 
 def monthly_matrix(conn, user_id, include_current_month=False, today=None):
@@ -259,9 +298,19 @@ def generate_forecasts(conn, user_id, today=None):
     """Month-ahead forecast per category.
 
     Returns {category_name: {'amount', 'method', 'basis', 'history', 'months'}}.
+
+    The result is memoised per user against a signature of the forecastable
+    transactions and the current month (see _forecast_signature); a change to
+    either recomputes, so a cache hit is always identical to a fresh run.
     """
+    signature = _forecast_signature(conn, user_id, today)
+    cached = _FORECAST_CACHE.get(user_id)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+
     matrix = monthly_matrix(conn, user_id, today=today)
     if matrix.empty:
+        _FORECAST_CACHE[user_id] = (signature, {})
         return {}
 
     forecasts = {}
@@ -279,6 +328,7 @@ def generate_forecasts(conn, user_id, today=None):
             'history': [round(float(v), 2) for v in series.tolist()],
             'months': [str(p) for p in series.index],
         }
+    _FORECAST_CACHE[user_id] = (signature, forecasts)
     return forecasts
 
 

@@ -10,8 +10,11 @@ implementation. No plaintext password is ever written to disk.
 """
 import os
 import secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from urllib.parse import urlsplit
 
 from flask import flash, redirect, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -66,6 +69,66 @@ def verify_password(conn, password):
     if not stored:
         return False
     return check_password_hash(stored, password or '')
+
+
+def safe_next(target):
+    """Return `target` only if it is a same-site relative path, else None.
+
+    A bare startswith('/') check is not enough: '//evil.example' is a
+    protocol-relative URL, which browsers resolve to an external host, so the
+    login page could be used to bounce a freshly signed-in user to a look-alike
+    phishing site (an open redirect). Backslashes are rejected too, because some
+    browsers normalise '/\\host' to '//host'.
+    """
+    if not target or not target.startswith('/'):
+        return None
+    if target.startswith('//') or '\\' in target:
+        return None
+    parts = urlsplit(target)
+    if parts.scheme or parts.netloc:
+        return None
+    return target
+
+
+# --- Login throttling -------------------------------------------------------
+# Unlimited guesses are harmless while the app is bound to 127.0.0.1, but
+# FLASK_HOST=0.0.0.0 (phone testing over Wi-Fi) exposes the login page to the
+# local network. After MAX_LOGIN_ATTEMPTS consecutive failures from one client,
+# further attempts are refused for LOGIN_LOCKOUT_SECONDS. State is in memory: a
+# server restart clears it, which is acceptable for a single-user local app.
+_FAILED_LOGINS = {}
+_FAILED_LOCK = threading.Lock()
+
+
+def login_lockout_remaining(client):
+    """Seconds left on this client's lockout, or 0 if it may try again."""
+    with _FAILED_LOCK:
+        entry = _FAILED_LOGINS.get(client)
+        if not entry or not entry['locked_until']:
+            return 0
+        remaining = entry['locked_until'] - time.monotonic()
+        if remaining <= 0:
+            _FAILED_LOGINS.pop(client, None)  # lockout served; start fresh
+            return 0
+        return int(remaining) + 1
+
+
+def record_failed_login(client):
+    """Count a failed attempt; lock the client out once the limit is reached."""
+    with _FAILED_LOCK:
+        entry = _FAILED_LOGINS.setdefault(client, {'count': 0, 'locked_until': 0})
+        entry['count'] += 1
+        if entry['count'] >= config.MAX_LOGIN_ATTEMPTS:
+            entry['locked_until'] = time.monotonic() + config.LOGIN_LOCKOUT_SECONDS
+
+
+def reset_login_attempts(client=None):
+    """Clear one client's failure count (after a success), or all of them."""
+    with _FAILED_LOCK:
+        if client is None:
+            _FAILED_LOGINS.clear()
+        else:
+            _FAILED_LOGINS.pop(client, None)
 
 
 def notice_acknowledged(conn):

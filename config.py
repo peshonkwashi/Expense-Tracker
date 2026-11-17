@@ -17,13 +17,18 @@ DATABASE_PATH = os.environ.get(
 SCHEMA_PATH = os.path.join(BASE_DIR, 'schema.sql')
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 MODEL_DIR = os.path.join(BASE_DIR, 'ml', 'models')
-CATEGORISER_PATH = os.path.join(MODEL_DIR, 'categoriser.joblib')
+# Overridable (like EXPENSE_TRACKER_DB) so an isolated run — a demo or a UAT
+# session — trains its own model without overwriting the real one.
+CATEGORISER_PATH = os.environ.get(
+    'CATEGORISER_PATH', os.path.join(MODEL_DIR, 'categoriser.joblib'))
 SECRET_KEY_FILE = os.path.join(BASE_DIR, '.flask_secret')
 
 CURRENCY = 'ZMW'
 
 # --- Security (section 5.9) -----------------------------------------------
 SESSION_TIMEOUT_MINUTES = 10
+MAX_LOGIN_ATTEMPTS = 5        # consecutive wrong passwords before a lockout
+LOGIN_LOCKOUT_SECONDS = 60    # how long a locked-out client must wait
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {'.csv'}
 

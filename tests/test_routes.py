@@ -34,6 +34,10 @@ class RouteTestCase(unittest.TestCase):
         database.init_db()
 
         import app as app_module
+        import security
+        # Login-throttle state is process-global; clear it so one test's
+        # deliberate wrong passwords cannot lock the next test out.
+        security.reset_login_attempts()
         self.app_module = app_module
         app_module.app.config['TESTING'] = True
         # CSRF protection is enforced in production but disabled here so the
@@ -109,7 +113,7 @@ class SetupTests(RouteTestCase):
 class AuthenticationTests(RouteTestCase):
     def test_protected_pages_require_a_password(self):
         self.complete_setup()
-        self.client.get('/logout')
+        self.client.post('/logout')
         for path in ('/', '/transactions', '/budget', '/savings', '/reports',
                      '/household', '/settings'):
             with self.subTest(path=path):
@@ -119,14 +123,14 @@ class AuthenticationTests(RouteTestCase):
 
     def test_wrong_password_is_rejected(self):
         self.complete_setup()
-        self.client.get('/logout')
+        self.client.post('/logout')
         response = self.client.post('/login', data={'password': 'wrong'},
                                     follow_redirects=True)
         self.assertIn(b'Incorrect password', response.data)
 
     def test_correct_password_signs_in(self):
         self.complete_setup()
-        self.client.get('/logout')
+        self.client.post('/logout')
         response = self.client.post('/login', data={'password': PASSWORD},
                                     follow_redirects=True)
         self.assertEqual(response.status_code, 200)
@@ -135,11 +139,79 @@ class AuthenticationTests(RouteTestCase):
     def test_login_does_not_follow_an_external_redirect(self):
         # A crafted ?next= must not bounce the user off-site after sign-in.
         self.complete_setup()
-        self.client.get('/logout')
+        self.client.post('/logout')
         response = self.client.post('/login?next=https://example.com/steal',
                                     data={'password': PASSWORD},
                                     follow_redirects=False)
         self.assertNotIn('example.com', response.headers.get('Location', ''))
+
+    def test_login_rejects_a_protocol_relative_redirect(self):
+        # '//host' passes a naive startswith('/') check but browsers resolve it
+        # to an external site — the open redirect the original check missed.
+        self.complete_setup()
+        self.client.post('/logout')
+        for target in ('//evil.example', '//evil.example/path', '/\\evil.example'):
+            with self.subTest(target=target):
+                response = self.client.post('/login?next=' + target,
+                                            data={'password': PASSWORD},
+                                            follow_redirects=False)
+                location = response.headers.get('Location', '')
+                self.assertNotIn('evil.example', location)
+                self.client.post('/logout')
+
+    def test_login_keeps_a_same_site_redirect(self):
+        self.complete_setup()
+        self.client.post('/logout')
+        response = self.client.post('/login?next=/budget',
+                                    data={'password': PASSWORD},
+                                    follow_redirects=False)
+        self.assertTrue(response.headers['Location'].endswith('/budget'))
+
+    def test_logout_requires_post(self):
+        # A GET link could be triggered by any page (<img src="/logout">).
+        self.complete_setup()
+        self.assertEqual(self.client.get('/logout').status_code, 405)
+        # ...and the user is still signed in afterwards.
+        self.assertEqual(self.client.get('/', follow_redirects=False).status_code, 200)
+
+    def test_repeated_wrong_passwords_lock_the_client_out(self):
+        self.complete_setup()
+        self.client.post('/logout')
+        for _ in range(config.MAX_LOGIN_ATTEMPTS):
+            self.client.post('/login', data={'password': 'wrong-guess'})
+        # Even the correct password is refused while the lockout runs.
+        response = self.client.post('/login', data={'password': PASSWORD},
+                                    follow_redirects=False)
+        self.assertEqual(response.status_code, 429)
+        self.assertIn(b'Too many incorrect attempts', response.data)
+
+    def test_successful_login_resets_the_failure_count(self):
+        self.complete_setup()
+        self.client.post('/logout')
+        for _ in range(config.MAX_LOGIN_ATTEMPTS - 1):
+            self.client.post('/login', data={'password': 'wrong-guess'})
+        self.client.post('/login', data={'password': PASSWORD})
+        self.client.post('/logout')
+        # One more miss after the reset must not trigger a lockout.
+        response = self.client.post('/login', data={'password': 'wrong-guess'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Incorrect password', response.data)
+
+    def test_assistant_escapes_user_controlled_names(self):
+        # Category and goal names are user-entered and are interpolated into
+        # the assistant's HTML answer, so they must arrive escaped (no XSS).
+        if not config.DEMO_FEATURES:
+            self.skipTest('assistant is a demo feature')
+        self.complete_setup()
+        payload = '<img src=x onerror=alert(1)>'
+        self.client.post('/savings', data={'goal_name': payload,
+                                           'target_amount': '1000',
+                                           'target_date': '2030-01-01'})
+        response = self.client.post('/ask-assistant',
+                                    json={'question': 'how are my goals'})
+        answer = response.get_json()['answer']
+        self.assertNotIn('<img', answer)
+        self.assertIn('&lt;img', answer)
 
     def test_password_is_not_stored_in_plain_text(self):
         self.complete_setup()
@@ -642,6 +714,111 @@ class DemoFeatureFlagTests(RouteTestCase):
                           self.client.get('/transactions').data)
         finally:
             config.DEMO_FEATURES = original
+
+
+class PWATests(RouteTestCase):
+    """Progressive Web App manifest, Service Worker, icons and offline page."""
+
+    def test_manifest_is_served_with_required_pwa_fields(self):
+        response = self.client.get('/static/manifest.json')
+        self.assertEqual(response.status_code, 200)
+        manifest = response.get_json()
+        self.assertEqual(manifest['short_name'], 'Expense Tracker')
+        self.assertEqual(manifest['start_url'], '/')
+        self.assertEqual(manifest['display'], 'standalone')
+        self.assertEqual(manifest['theme_color'], '#14532d')
+        sizes = {icon['sizes'] for icon in manifest['icons']}
+        self.assertTrue({'192x192', '512x512', 'any'}.issubset(sizes))
+        response.close()
+
+    def test_manifest_declares_app_shortcuts(self):
+        response = self.client.get('/static/manifest.json')
+        urls = {s['url'] for s in response.get_json().get('shortcuts', [])}
+        response.close()
+        self.assertTrue({'/', '/transactions', '/reports'}.issubset(urls))
+
+    def test_service_worker_is_served_at_root_scope(self):
+        response = self.client.get('/sw.js')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('javascript', response.content_type)
+        self.assertEqual(response.headers.get('Service-Worker-Allowed'), '/')
+        self.assertIn('no-cache', response.headers.get('Cache-Control', ''))
+        self.assertIn(b'expense-tracker-shell', response.data)
+        response.close()
+
+    def test_offline_fallback_page_renders_without_login(self):
+        response = self.client.get('/offline')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'You are offline', response.data)
+
+    def test_pwa_icons_and_head_links_exist(self):
+        setup_page = self.client.get('/setup').data
+        self.assertIn(b'rel="manifest"', setup_page)
+        self.assertIn(b'name="theme-color" content="#14532d"', setup_page)
+        self.assertIn(b'rel="apple-touch-icon"', setup_page)
+        self.assertIn(b'/static/js/pwa.js', setup_page)
+
+        for icon_path in ('/static/icons/icon-192.png',
+                          '/static/icons/icon-512.png'):
+            res = self.client.get(icon_path)
+            self.assertEqual(res.status_code, 200, icon_path)
+            self.assertTrue(res.data.startswith(b'\x89PNG\r\n\x1a\n'))
+            res.close()
+
+        svg_res = self.client.get('/static/icons/icon.svg')
+        self.assertEqual(svg_res.status_code, 200)
+        self.assertIn(b'<svg', svg_res.data)
+        svg_res.close()
+
+
+class UATAndPerformanceTests(RouteTestCase):
+    """Automated NFR-01 response-time check and UAT session preparation test."""
+
+    def test_nfr01_core_pages_render_within_three_seconds(self):
+        import time
+        import database
+        from services import ingestion
+
+        self.complete_setup()
+        statement = build_statement(months=6)
+        try:
+            conn = database.get_db_connection()
+            try:
+                user = database.get_user(conn)
+                ingestion.import_statement(conn, user['user_id'], statement)
+                ingestion.post_import_pipeline(conn, user['user_id'])
+            finally:
+                conn.close()
+        finally:
+            if os.path.exists(statement):
+                os.unlink(statement)
+
+        for route in ('/', '/transactions', '/budget', '/savings',
+                      '/reports', '/settings'):
+            with self.subTest(route=route):
+                start = time.perf_counter()
+                response = self.client.get(route)
+                elapsed = time.perf_counter() - start
+                self.assertEqual(response.status_code, 200)
+                self.assertLessEqual(
+                    elapsed, 3.0,
+                    f'{route} took {elapsed:.2f}s, exceeding the NFR-01 3.0s limit')
+
+    def test_uat_session_launcher_prepares_isolated_files(self):
+        import shutil
+        import run_uat_session
+
+        temp_root = tempfile.mkdtemp()
+        try:
+            info = run_uat_session.prepare_session(
+                'P01', salary=12000.0, salary_day=25, months=4,
+                reset=True, base_dir=temp_root)
+            self.assertEqual(info['participant'], 'P01')
+            self.assertTrue(os.path.exists(info['csv_path']))
+            self.assertGreater(info['row_count'], 50)
+            self.assertTrue(info['db_path'].endswith('uat_P01.db'))
+        finally:
+            shutil.rmtree(temp_root, ignore_errors=True)
 
 
 if __name__ == '__main__':
