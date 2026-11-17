@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Acceptance Testing (UAT) — Participant Handout &amp; Feedback Form</title>
+    <style>
+        :root {
+            --brand: #14532d;
+            --brand-soft: #e6f2ea;
+            --ink: #14202e;
+            --muted: #5b6b7f;
+            --line: #cfd8e3;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            color: var(--ink);
+            background: #f4f6f9;
+            margin: 0;
+            padding: 1.5rem;
+            line-height: 1.5;
+            font-size: 14px;
+        }
+        .sheet {
+            max-width: 860px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 2rem 2.25rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        .toolbar {
+            max-width: 860px;
+            margin: 0 auto 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--brand);
+            color: #fff;
+            padding: 0.75rem 1.25rem;
+            border-radius: 8px;
+        }
+        .toolbar button {
+            background: #fff;
+            color: var(--brand);
+            border: none;
+            padding: 0.45rem 0.95rem;
+            border-radius: 6px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        h1 {
+            font-size: 1.35rem;
+            color: var(--brand);
+            margin: 0 0 0.25rem;
+            border-bottom: 2px solid var(--brand);
+            padding-bottom: 0.4rem;
+        }
+        h2 {
+            font-size: 1.05rem;
+            color: var(--brand);
+            margin: 1.4rem 0 0.5rem;
+            background: var(--brand-soft);
+            padding: 0.35rem 0.65rem;
+            border-left: 4px solid var(--brand);
+            border-radius: 4px;
+        }
+        h3 {
+            font-size: 0.95rem;
+            margin: 0.9rem 0 0.3rem;
+        }
+        p { margin: 0.35rem 0; }
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.65rem 1.25rem;
+            margin: 0.75rem 0 1rem;
+            padding: 0.75rem;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+        }
+        .meta-field label {
+            display: block;
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: var(--muted);
+            text-transform: uppercase;
+        }
+        .meta-field input, .meta-field select {
+            width: 100%;
+            border: none;
+            border-bottom: 1px solid var(--line);
+            padding: 0.25rem 0;
+            font: inherit;
+        }
+        ol { margin: 0.35rem 0 0.75rem 1.25rem; padding: 0; }
+        li { margin-bottom: 0.3rem; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0.5rem 0 1rem;
+            font-size: 0.88rem;
+        }
+        th, td {
+            border: 1px solid var(--line);
+            padding: 0.45rem 0.55rem;
+            text-align: left;
+            vertical-align: middle;
+        }
+        th {
+            background: #f8fafc;
+            font-weight: 700;
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+        td.center, th.center { text-align: center; }
+        input[type="text"].table-note {
+            width: 100%;
+            border: none;
+            font: inherit;
+        }
+        textarea {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 0.5rem;
+            font: inherit;
+            min-height: 54px;
+            margin-top: 0.25rem;
+        }
+        .code {
+            background: #f1f5f9;
+            padding: 0.1rem 0.35rem;
+            border-radius: 4px;
+            font-family: Consolas, monospace;
+            font-size: 0.85rem;
+        }
+        .sign-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 1.5rem;
+            margin-top: 1.25rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--line);
+        }
+        @media print {
+            body { background: #fff; padding: 0; }
+            .toolbar { display: none !important; }
+            .sheet { box-shadow: none; padding: 0.5rem; max-width: 100%; }
+            h2 { break-after: avoid; }
+            table, tr { break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="toolbar">
+    <span><strong>UAT Participant Handout &amp; Evaluation Sheet</strong> — Fill out on screen or print to PDF/paper</span>
+    <button type="button" onclick="window.print()">Print / Save as PDF</button>
+</div>
+
+<div class="sheet">
+    <h1>Salary-Linked Expense Tracker &amp; Budget Advisor — User Acceptance Test</h1>
+    <p style="color: var(--muted); margin-bottom: 0.75rem;">
+        Thank you for testing this application. You are evaluating a privacy-first personal finance tool that links spending analysis and budget advice to your payday cycle. All data stays strictly on the local device.
+    </p>
+
+    <div class="meta-grid">
+        <div class="meta-field">
+            <label>Participant ID / Name</label>
+            <input type="text" placeholder="e.g. P01">
+        </div>
+        <div class="meta-field">
+            <label>Date</label>
+            <input type="text" placeholder="YYYY-MM-DD">
+        </div>
+        <div class="meta-field">
+            <label>Participant Role / Background</label>
+            <select>
+                <option>Salaried Earner / Professional</option>
+                <option>University Student</option>
+                <option>General / Non-Technical User</option>
+                <option>IT / Finance Evaluator</option>
+            </select>
+        </div>
+        <div class="meta-field">
+            <label>Device &amp; Browser Tested</label>
+            <input type="text" placeholder="e.g. Chrome Desktop / Android Phone PWA">
+        </div>
+    </div>
+
+    <h2>Part 1 — Guided Testing Tasks (15–20 Minutes)</h2>
+    <p>Please complete the five short tasks below. During <strong>Task 1</strong>, please try to complete the steps without asking for hints so we can test how intuitive the first-time setup is.</p>
+
+    <h3>Task 1: First-Time Profile Setup &amp; Bank Statement Upload <em>(Target: Under 5 Minutes)</em></h3>
+    <ol>
+        <li>Open the application link provided by the facilitator. On the <strong>Set up your profile</strong> screen, enter:
+            <ul>
+                <li><strong>Your name:</strong> Your first name (or <code>Tester P01</code>)</li>
+                <li><strong>Monthly salary (ZMW):</strong> <span class="code">12000</span> &nbsp;|&nbsp; <strong>Day of the month you are paid:</strong> <span class="code">25</span></li>
+                <li><strong>Password:</strong> Choose any password of at least 8 characters and confirm it.</li>
+            </ul>
+        </li>
+        <li>Read the data privacy notice, tick <em>"I understand how my data is stored"</em>, and click <strong>Create profile</strong>.</li>
+        <li>Go to <strong>Transactions</strong>, locate <strong>Manual CSV Upload</strong>, select the sample bank statement file (<span class="code">bank_statement_P01.csv</span>), and click <strong>Upload and categorise</strong>.</li>
+        <li>Click <strong>Dashboard</strong> in the top menu to view your financial overview. <em>(Tell the facilitator when you reach the Dashboard.)</em></li>
+    </ol>
+
+    <h3>Task 2: Checking Automatic Categories, Correcting a Transaction &amp; Receipt Items</h3>
+    <ol>
+        <li>Open <strong>Transactions</strong> and check the <strong>Categorisation model</strong> accuracy badge at the top.</li>
+        <li>Browse the list of imported transactions. Notice how merchants (e.g., Shoprite, ZESCO, Yango, Netflix) were automatically sorted into <em>Essential</em> and <em>Discretionary</em> categories.</li>
+        <li>Find any transaction row, change its category using the dropdown under <strong>Correct it</strong>, and click <strong>Save</strong>. Observe the confirmation message showing that the system learned from your correction.</li>
+        <li>On any debit row, click <strong>or add items manually</strong> (or upload a receipt photo via <strong>Scan Receipt</strong>) and add a sample receipt item (e.g., <code>Bread</code>, Qty <code>1</code>, Amount <code>25</code>).</li>
+    </ol>
+
+    <h3>Task 3: Salary-Cycle Insights, Subscriptions &amp; Budget Advice</h3>
+    <ol>
+        <li>Open <strong>Dashboard</strong> and check:
+            <ul>
+                <li>Your <strong>Salary-Cycle Spending</strong> pattern (how much is spent right after payday on the 25th vs later in the month).</li>
+                <li>The <strong>Alerts / Nudges</strong> section (plain-language warnings when a category crosses 80% of its recommended budget).</li>
+                <li>The <strong>Recurring Subscriptions</strong> summary showing monthly charges (Netflix, DSTV, Spotify) and their yearly cost.</li>
+            </ul>
+        </li>
+        <li>Open <strong>Budget</strong> and click <strong>Why this number?</strong> under any category to read how its recommended limit was calculated from your salary.</li>
+    </ol>
+
+    <h3>Task 4: Savings Goals, Monthly Reports &amp; Data Backup</h3>
+    <ol>
+        <li>Open <strong>Savings Goals</strong>, add a new goal (e.g., <code>Emergency Fund</code>, Target: <code>6000</code> ZMW, Date: 6 months ahead), and click <strong>Add goal</strong>. Check whether the monthly required saving is marked <em>On track</em> or <em>Shortfall</em>, then log a <code>500</code> ZMW contribution.</li>
+        <li>Open <strong>Reports</strong> and switch between months to see your total income, total spending, net savings rate, and category breakdown.</li>
+        <li>Open <strong>Settings</strong> to view the model accuracy badges and test <strong>Export database backup</strong>.</li>
+    </ol>
+
+    <h3>Task 5: Mobile Phone / App Mode Check</h3>
+    <ol>
+        <li>View the app on a mobile phone (or mobile screen view) and tap <strong>Install App / Add to Home Screen</strong> if prompted.</li>
+        <li>Open <strong>Transactions</strong> on the mobile screen and confirm that the table cleanly stacks into readable cards and that buttons are easy to tap.</li>
+    </ol>
+
+    <h2>Part 2 — Feature Verification Checklist</h2>
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 10%;">Task</th>
+                <th style="width: 48%;">What to Verify</th>
+                <th class="center" style="width: 18%;">Worked as Expected?</th>
+                <th style="width: 24%;">Comments / Issues</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Task 1</strong></td>
+                <td>Profile setup completed &amp; CSV statement uploaded cleanly</td>
+                <td class="center"><label><input type="checkbox"> Pass</label> &nbsp; <label><input type="checkbox"> Fail</label></td>
+                <td><input type="text" class="table-note" placeholder="Optional note..."></td>
+            </tr>
+            <tr>
+                <td><strong>Task 2a</strong></td>
+                <td>Transactions automatically categorised into sensible groups</td>
+                <td class="center"><label><input type="checkbox"> Pass</label> &nbsp; <label><input type="checkbox"> Fail</label></td>
+                <td><input type="text" class="table-note" placeholder="Optional note..."></td>
+            </tr>
+            <tr>
+                <td><strong>Task 2b</strong></td>
+                <td>Changing a category saved immediately &amp; retrained the model</td>
+                <td class="center"><label><input type="checkbox"> Pass</label> &nbsp; <label><input type="checkbox"> Fail</label></td>
+                <td><input type="text" class="table-note" placeholder="Optional note..."></td>
+            </tr>
+            <tr>
+                <td><strong>Task 3a</strong></td>
+                <td>Dashboard clearly shows payday cycle, subscriptions &amp; 80% alerts</td>
+                <td class="center"><label><input type="checkbox"> Pass</label> &nbsp; <label><input type="checkbox"> Fail</label></td>
+                <td><input type="text" class="table-note" placeholder="Optional note..."></td>
+            </tr>
+            <tr>
+                <td><strong>Task 3b</strong></td>
+                <td>Budget page shows forecasts &amp; plain-English <em>"Why this number?"</em></td>
+                <td class="center"><label><input type="checkbox"> Pass</label> &nbsp; <label><input type="checkbox"> Fail</label></td>
+                <td><input type="text" class="table-note" placeholder="Optional note..."></td>
+            </tr>
+            <tr>
+                <td><strong>Task 4</strong></td>
+                <td>Savings Goal tracker &amp; Monthly Report calculated accurately</td>
+                <td class="center"><label><input type="checkbox"> Pass</label> &nbsp; <label><input type="checkbox"> Fail</label></td>
+                <td><input type="text" class="table-note" placeholder="Optional note..."></td>
+            </tr>
+            <tr>
+                <td><strong>Task 5</strong></td>
+                <td>Pages loaded quickly (&le; 3s) &amp; mobile layout was easy to read</td>
+                <td class="center"><label><input type="checkbox"> Pass</label> &nbsp; <label><input type="checkbox"> Fail</label></td>
+                <td><input type="text" class="table-note" placeholder="Optional note..."></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>Part 3 — Tester Feedback Survey (1 = Strongly Disagree, 5 = Strongly Agree)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 65%;">Statement</th>
+                <th class="center">1</th>
+                <th class="center">2</th>
+                <th class="center">3</th>
+                <th class="center">4</th>
+                <th class="center">5</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>1. Setting up my profile and uploading a bank statement was easy to do without help.</td>
+                <td class="center"><input type="radio" name="q1"></td>
+                <td class="center"><input type="radio" name="q1"></td>
+                <td class="center"><input type="radio" name="q1"></td>
+                <td class="center"><input type="radio" name="q1"></td>
+                <td class="center"><input type="radio" name="q1"></td>
+            </tr>
+            <tr>
+                <td>2. The automatic categories matched what I expected for local merchants (Shoprite, ZESCO, Yango, etc.).</td>
+                <td class="center"><input type="radio" name="q2"></td>
+                <td class="center"><input type="radio" name="q2"></td>
+                <td class="center"><input type="radio" name="q2"></td>
+                <td class="center"><input type="radio" name="q2"></td>
+                <td class="center"><input type="radio" name="q2"></td>
+            </tr>
+            <tr>
+                <td>3. Correcting a category was simple, and I liked that the system learned from my change immediately.</td>
+                <td class="center"><input type="radio" name="q3"></td>
+                <td class="center"><input type="radio" name="q3"></td>
+                <td class="center"><input type="radio" name="q3"></td>
+                <td class="center"><input type="radio" name="q3"></td>
+                <td class="center"><input type="radio" name="q3"></td>
+            </tr>
+            <tr>
+                <td>4. Tracking spending from payday to payday makes more sense than starting on the 1st of the month.</td>
+                <td class="center"><input type="radio" name="q4"></td>
+                <td class="center"><input type="radio" name="q4"></td>
+                <td class="center"><input type="radio" name="q4"></td>
+                <td class="center"><input type="radio" name="q4"></td>
+                <td class="center"><input type="radio" name="q4"></td>
+            </tr>
+            <tr>
+                <td>5. The budget explanations (<em>"Why this number?"</em>) were clear and free of confusing financial jargon.</td>
+                <td class="center"><input type="radio" name="q5"></td>
+                <td class="center"><input type="radio" name="q5"></td>
+                <td class="center"><input type="radio" name="q5"></td>
+                <td class="center"><input type="radio" name="q5"></td>
+                <td class="center"><input type="radio" name="q5"></td>
+            </tr>
+            <tr>
+                <td>6. The 80% budget alerts and subscription summary helped highlight where money was going.</td>
+                <td class="center"><input type="radio" name="q6"></td>
+                <td class="center"><input type="radio" name="q6"></td>
+                <td class="center"><input type="radio" name="q6"></td>
+                <td class="center"><input type="radio" name="q6"></td>
+                <td class="center"><input type="radio" name="q6"></td>
+            </tr>
+            <tr>
+                <td>7. The Savings Goal tracker clearly showed whether my goal was realistic on my current salary.</td>
+                <td class="center"><input type="radio" name="q7"></td>
+                <td class="center"><input type="radio" name="q7"></td>
+                <td class="center"><input type="radio" name="q7"></td>
+                <td class="center"><input type="radio" name="q7"></td>
+                <td class="center"><input type="radio" name="q7"></td>
+            </tr>
+            <tr>
+                <td>8. The mobile phone / installed app layout was comfortable to read and navigate.</td>
+                <td class="center"><input type="radio" name="q8"></td>
+                <td class="center"><input type="radio" name="q8"></td>
+                <td class="center"><input type="radio" name="q8"></td>
+                <td class="center"><input type="radio" name="q8"></td>
+                <td class="center"><input type="radio" name="q8"></td>
+            </tr>
+            <tr>
+                <td>9. Knowing that all financial data stays on my own device makes me trust the system more.</td>
+                <td class="center"><input type="radio" name="q9"></td>
+                <td class="center"><input type="radio" name="q9"></td>
+                <td class="center"><input type="radio" name="q9"></td>
+                <td class="center"><input type="radio" name="q9"></td>
+                <td class="center"><input type="radio" name="q9"></td>
+            </tr>
+            <tr>
+                <td>10. Overall, I would find this tool useful for planning my monthly spending after payday.</td>
+                <td class="center"><input type="radio" name="q10"></td>
+                <td class="center"><input type="radio" name="q10"></td>
+                <td class="center"><input type="radio" name="q10"></td>
+                <td class="center"><input type="radio" name="q10"></td>
+                <td class="center"><input type="radio" name="q10"></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <p><strong>What did you find most useful, or what could be improved?</strong></p>
+    <textarea placeholder="Write any comments or suggestions here..."></textarea>
+
+    <div class="sign-row">
+        <div>
+            <strong>Tester Signature / Initials:</strong> ___________________________
+        </div>
+        <div>
+            <strong>Facilitator Task 1 Time:</strong> _____ min _____ sec
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
+

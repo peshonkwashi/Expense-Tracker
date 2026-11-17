@@ -43,6 +43,30 @@ Run the tests with:
 python -m unittest discover -s tests -t .
 ```
 
+### Mobile & Progressive Web App (PWA) use
+
+The interface includes a Web App Manifest (`/static/manifest.json`), app icons,
+an offline fallback screen (`/offline`), and a root-scoped Service Worker
+(`/sw.js`). On desktop (`http://127.0.0.1:5000` or `http://localhost:5000`),
+Chrome and Edge display an **Install App** button directly in the top bar and
+address bar.
+
+To access or install the app from a **mobile phone** on the same Wi-Fi network,
+bind Flask to all interfaces (`0.0.0.0`):
+
+```powershell
+$env:FLASK_HOST="0.0.0.0"; python app.py
+```
+
+Then open `http://<your-pc-lan-ip>:5000` on your phone. (For full mobile PWA
+installation outside `localhost`, mobile browsers require HTTPS with a
+certificate the phone trusts — either forward the port over USB via
+`adb reverse tcp:5000 tcp:5000` and open `http://localhost:5000` on the phone,
+or set `$env:SSL_CERT` and `$env:SSL_KEY` to an `mkcert` certificate pair as
+described in [docs/mobile-install.md](docs/mobile-install.md). The quick
+self-signed option, `$env:FLASK_SSL="adhoc"`, serves HTTPS but is untrusted, so
+the PWA will not install over it.)
+
 ---
 
 ## Demo extensions (beyond the graded requirements)
