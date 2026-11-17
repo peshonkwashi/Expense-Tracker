@@ -9,7 +9,7 @@
     <div class="card">
         <h2>Categorisation model</h2>
         {% if categorisation %}
-            <table style="font-size:.9rem;">
+            <table class="kv" style="font-size:.9rem;">
                 <tr><td>Algorithm chosen</td><td class="num">{{ categorisation['algorithm'] }}</td></tr>
                 <tr><td>Macro F1 (5-fold CV)</td>
                     <td class="num">
@@ -35,7 +35,7 @@
     <div class="card">
         <h2>Forecasting model</h2>
         {% if forecasting_metric %}
-            <table style="font-size:.9rem;">
+            <table class="kv" style="font-size:.9rem;">
                 <tr><td>Method</td><td class="num">{{ forecasting_metric['algorithm'] }}</td></tr>
                 <tr>
                     <td>
@@ -81,7 +81,7 @@
 
 <div class="card">
     <h2>Receipt scanning</h2>
-    <table style="font-size:.9rem;">
+    <table class="kv" style="font-size:.9rem;">
         <tr><td>Tesseract OCR</td>
             <td class="num">
                 {% if ocr_status.tesseract %}
@@ -130,7 +130,7 @@
 <div class="card">
     <h2>Custom Categories</h2>
     <p class="muted">Add a new category to assign your transactions to. Once you label a few transactions with it, the ML model will learn to apply it automatically.</p>
-    <form method="POST" action="{{ url_for('add_category') }}" style="display: flex; gap: 10px; align-items: center;">
+    <form method="POST" action="{{ url_for('add_category') }}" class="category-form">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <input type="text" name="category_name" placeholder="Category Name (e.g. Pet Care)" required>
         <select name="category_type" required>
@@ -144,7 +144,7 @@
 
 <div class="card">
     <h2>Profile</h2>
-    <table style="font-size:.9rem;">
+    <table class="kv" style="font-size:.9rem;">
         <tr><td>Name</td><td class="num">{{ user['full_name'] }}</td></tr>
         <tr><td>Monthly salary</td><td class="num">{{ user['salary_amount']|money }} {{ currency }}</td></tr>
         <tr><td>Pay day</td><td class="num">Day {{ user['salary_day'] }}</td></tr>

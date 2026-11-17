@@ -66,6 +66,15 @@ body {
 .topbar nav a:hover { background: rgba(255, 255, 255, .12); color: #fff; }
 .topbar nav a.active { background: rgba(255, 255, 255, .2); color: #fff; font-weight: 600; }
 
+/* Sign out is a POST form (CSRF-safe) styled to sit in the nav like a link. */
+.topbar nav .nav-form { margin: 0; display: flex; }
+.topbar nav .nav-link-button {
+    background: none; border: 0; color: rgba(255, 255, 255, .88);
+    padding: .4rem .7rem; border-radius: 6px; font-size: .93rem;
+    font-weight: 400; white-space: nowrap; min-height: 0;
+}
+.topbar nav .nav-link-button:hover { background: rgba(255, 255, 255, .12); color: #fff; filter: none; }
+
 .container { max-width: 1120px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 
 /* --- Typography --------------------------------------------------------- */
@@ -106,6 +115,12 @@ th, td { padding: .6rem .65rem; text-align: left; border-bottom: 1px solid var(-
 th { font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); font-weight: 700; white-space: nowrap; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 tbody tr:hover { background: #fafcfe; }
+
+/* Label/value tables (Settings cards, Savings goal cards). Their value column
+   can hold prose — model names, notes — so it must be allowed to wrap: the
+   global td.num nowrap is meant for numeric columns in wide data tables, and an
+   unwrappable value forces the whole page wider than a phone screen (NFR-08). */
+table.kv td.num { white-space: normal; overflow-wrap: break-word; }
 
 /* --- Badges ------------------------------------------------------------- */
 .badge {
@@ -187,6 +202,12 @@ button.small, .button.small, select.small { padding: .28rem .55rem; font-size: .
 
 .inline-form { display: inline-flex; gap: .35rem; align-items: center; margin: 0; }
 
+/* Add-category form (Settings): wraps on narrow screens instead of crushing
+   its input and select into unreadable slivers. */
+.category-form { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+.category-form input[type=text] { flex: 1 1 200px; width: auto; min-width: 0; }
+.category-form select { flex: 1 1 150px; width: auto; }
+
 /* --- Receipt items ------------------------------------------------------ */
 .receipt-items { margin: 5px 0 .4rem; padding-left: 1.2rem; }
 .receipt-items li { display: flex; align-items: center; gap: .4rem; }
@@ -260,4 +281,77 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
 
     .topbar nav { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; padding-bottom: 5px; scrollbar-width: none; }
     .topbar nav::-webkit-scrollbar { display: none; }
+
+    /* Scroll affordance: while menu items sit off-screen to the right, fade the
+       nav's right edge and show a chevron so the hidden entries (Settings,
+       Sign out) are discoverable. pwa.js toggles .nav-overflow from the nav's
+       scroll position; without JavaScript the nav simply scrolls as before. */
+    .topbar { position: relative; }
+    .topbar.nav-overflow nav {
+        -webkit-mask-image: linear-gradient(to right, #000 80%, rgba(0, 0, 0, .08));
+        mask-image: linear-gradient(to right, #000 80%, rgba(0, 0, 0, .08));
+    }
+    .topbar.nav-overflow::after {
+        content: '\203A';
+        position: absolute;
+        right: .4rem;
+        bottom: .55rem;
+        color: #fff;
+        font-size: 1.2rem;
+        line-height: 1;
+        pointer-events: none;
+        opacity: .9;
+    }
+
+    /* Totals rows (tfoot) get the same stacked-card treatment as tbody rows,
+       otherwise they render as a misaligned table fragment on phones. */
+    table.data-table tfoot, table.data-table tfoot tr, table.data-table tfoot th { display: block; width: 100%; }
+    table.data-table tfoot tr { margin-bottom: 1rem; background: var(--brand-soft); border: 1px solid #c6e0d1; border-radius: var(--radius); padding: 0.5rem; }
+    table.data-table tfoot th { display: flex; justify-content: space-between; align-items: center; border: none; padding: 0.5rem; border-bottom: 1px dashed var(--line); text-align: right; white-space: normal; text-transform: none; font-size: .92rem; color: var(--ink); }
+    table.data-table tfoot th:last-child { border-bottom: none; }
+    table.data-table tfoot th::before { content: attr(data-label); font-weight: 600; color: var(--ink-soft); margin-right: auto; text-align: left; }
+    table.data-table tfoot th.foot-title { justify-content: flex-start; font-weight: 700; text-align: left; }
+    table.data-table tfoot th.foot-title::before { content: none; }
+    table.data-table tfoot th:empty { display: none; }
+}
+
+
+/* --- Progressive Web App (PWA) install button & mobile touch polish ----- */
+.install-btn {
+    background: #fff;
+    color: var(--brand);
+    border: 1px solid rgba(255, 255, 255, .9);
+    padding: .35rem .7rem;
+    border-radius: 6px;
+    font-size: .86rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+.install-btn[hidden] { display: none !important; }
+.install-btn:hover { background: var(--brand-soft); filter: none; }
+
+@media (max-width: 768px) {
+    /* Prevent iOS Safari auto-zoom on form focus and give comfortable touch targets */
+    input[type=text], input[type=number], input[type=date], input[type=password], select {
+        font-size: 16px;
+        min-height: 44px;
+    }
+    /* 44px minimum touch target (WCAG 2.5.5 / Apple HIG), including the
+       .small buttons on each transaction row and every nav entry. */
+    button, .button { min-height: 44px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; }
+    .topbar nav a, .topbar nav .nav-link-button {
+        min-height: 44px; display: inline-flex; align-items: center;
+    }
+}
+
+@media (display-mode: standalone) {
+    .topbar {
+        padding-top: calc(.75rem + env(safe-area-inset-top, 0px));
+        padding-left: calc(1.25rem + env(safe-area-inset-left, 0px));
+        padding-right: calc(1.25rem + env(safe-area-inset-right, 0px));
+    }
+    .container {
+        padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
+    }
 }

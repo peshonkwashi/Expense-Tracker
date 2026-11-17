@@ -2,13 +2,25 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#14532d">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Expense Tracker">
     <title>{% block title %}Salary-Linked Expense Tracker{% endblock %}</title>
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='icons/icon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <!-- Chart.js renders the dashboard visuals. charts.js falls back to CSS bars
-         when this cannot load, so the dashboard still works fully offline. -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+    <!-- Chart.js is self-hosted (no CDN) and deferred, so no page's first paint
+         waits on a third-party request — important on mobile data — and the
+         dashboard renders fully offline (NFR-05). charts.js still falls back to
+         CSS bars if the library ever fails to load. Deferred scripts execute in
+         document order, so Chart is defined before charts.js runs. -->
+    <script src="{{ url_for('static', filename='js/chart.umd.js') }}" defer></script>
     <script src="{{ url_for('static', filename='js/charts.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/pwa.js') }}" defer></script>
 </head>
 <body data-currency="{{ currency }}">
 {% if not hide_nav %}
@@ -22,7 +34,11 @@
         <a href="{{ url_for('reports') }}" {% if request.endpoint == 'reports' %}class="active"{% endif %}>Reports</a>
         {% if demo_features %}<a href="{{ url_for('household') }}" {% if request.endpoint == 'household' %}class="active"{% endif %}>Household</a>{% endif %}
         <a href="{{ url_for('settings') }}" {% if request.endpoint == 'settings' %}class="active"{% endif %}>Settings</a>
-        <a href="{{ url_for('logout') }}">Sign out</a>
+        <form method="POST" action="{{ url_for('logout') }}" class="nav-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <button type="submit" class="nav-link-button">Sign out</button>
+        </form>
+        <button type="button" id="install-pwa-btn" class="install-btn" hidden>Install App</button>
     </nav>
 </header>
 {% endif %}

@@ -33,7 +33,7 @@ correction.</p>
         <form method="POST" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <div style="margin-bottom: 0.5rem;">
-                <input type="file" name="file" accept=".csv" required style="width: 100%;">
+                <input type="file" name="file" accept=".csv,text/csv" required style="width: 100%;">
             </div>
             <p class="hint" style="margin-bottom: 1rem;">CSV only, up to 5MB. Duplicates are skipped safely.</p>
             <button type="submit" style="width: 100%;">Upload and categorise</button>
@@ -136,12 +136,12 @@ correction.</p>
                         {% else %}—{% endif %}
                         </span>
                     </td>
-                    <td data-label="Action" class="no-print">
+                    <td data-label="Correct it" class="no-print">
                         <div style="display: flex; gap: 5px; flex-direction: column;">
                             <form class="inline-form" method="POST"
                                   action="{{ url_for('recategorise', transaction_id=txn['transaction_id']) }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                <select name="category_name" class="small">
+                                <select name="category_name" class="small" aria-label="Correct category for {{ txn['description'] }}">
                                     {% for category in categories %}
                                     <option value="{{ category['category_name'] }}"
                                         {% if category['category_name'] == txn['category_name'] %}selected{% endif %}>
@@ -156,7 +156,13 @@ correction.</p>
                                 <form class="inline-form" method="POST"
                                       action="{{ url_for('upload_receipt', transaction_id=txn['transaction_id']) }}" enctype="multipart/form-data">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                    <input type="file" name="receipt" accept="image/*, .pdf, .heic" class="small receipt-input">
+                                    {# capture="environment" offers the phone's rear camera in the file
+                                       chooser, so a paper receipt can be photographed on the spot; the
+                                       onchange auto-submit removes the extra "Scan Receipt" tap. The
+                                       button stays as the no-JavaScript fallback. #}
+                                    <input type="file" name="receipt" accept="image/*,.pdf,.heic" capture="environment"
+                                           class="small receipt-input" aria-label="Receipt photo or PDF"
+                                           onchange="if (this.files.length) { this.form.submit(); }">
                                     <button type="submit" class="secondary small" title="Extract line items from receipt">Scan Receipt</button>
                                 </form>
                                 <details class="manual-items">

@@ -102,10 +102,10 @@ figure below can be traced back to the data it came from.</p>
             </tbody>
             <tfoot>
                 <tr>
-                    <th colspan="3">Total allocated</th>
-                    <th class="num">{{ budget.allocated_total|money }}</th>
-                    <th class="num">{{ (budget.allocated_total / budget.salary * 100)|round(0)|int }}%</th>
-                    <th class="num">{{ budget.spent_total|money }}</th>
+                    <th colspan="3" class="foot-title">Total allocated</th>
+                    <th class="num" data-label="Recommended">{{ budget.allocated_total|money }}</th>
+                    <th class="num" data-label="% of salary">{{ (budget.allocated_total / budget.salary * 100)|round(0)|int }}%</th>
+                    <th class="num" data-label="Spent so far">{{ budget.spent_total|money }}</th>
                     <th></th>
                 </tr>
             </tfoot>

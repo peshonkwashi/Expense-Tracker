@@ -1,12 +1,9 @@
 /* Dashboard charts (section 5.8).
  *
- * The report commits to the system working with no internet connection
- * (section 5.11), but Chart.js is loaded from a CDN. Rather than let the
- * dashboard render an empty box when offline, every chart degrades to an
- * accessible CSS bar chart built from the same data.
- *
- * To remove the dependency entirely, download chart.umd.js into static/js/
- * and point the script tag in base.html at it.
+ * Chart.js is self-hosted at static/js/chart.umd.js (and pre-cached by the
+ * service worker), so charts render with no internet connection at all
+ * (section 5.11 / NFR-05). Should the library ever fail to load anyway, every
+ * chart still degrades to an accessible CSS bar chart built from the same data.
  */
 (function () {
     'use strict';

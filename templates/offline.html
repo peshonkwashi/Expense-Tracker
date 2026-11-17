@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% set hide_nav = true %}
+{% block title %}Offline — Expense Tracker{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>You are offline</h1>
+    <p class="lede">Your device cannot reach the local Expense Tracker server right now.</p>
+    <p class="muted">Because all financial data is stored privately on your host machine (NFR-05), make sure the Expense Tracker server is running and your phone is connected to the same network.</p>
+    <div style="margin-top: 1.25rem; display: flex; gap: .6rem; flex-wrap: wrap;">
+        <button type="button" onclick="window.location.reload()">Try again</button>
+        <a class="button secondary" href="{{ url_for('dashboard') }}">Back to Dashboard</a>
+    </div>
+</div>
+{% endblock %}
+

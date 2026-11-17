@@ -72,32 +72,44 @@
     <h2>AI Financial Assistant (Mock)</h2>
     <p class="muted">Ask me questions about your spending! E.g. "How much did I spend on food this month?" or "Can I afford a new jacket?"</p>
     
-    <div id="chat-history" style="min-height: 100px; max-height: 300px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.8rem;">
+    {# role=log + aria-live: screen readers announce each new answer as it arrives. #}
+    <div id="chat-history" role="log" aria-live="polite" aria-label="Assistant conversation" style="min-height: 100px; max-height: 300px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.8rem;">
         <!-- Chat bubbles will go here -->
     </div>
     
     <form id="chat-form" style="display: flex; gap: 0.5rem;" onsubmit="handleChat(event)">
-        <input type="text" id="chat-input" placeholder="Ask your assistant..." style="flex: 1;" required>
+        <input type="text" id="chat-input" placeholder="Ask your assistant..." style="flex: 1;" required
+               aria-label="Ask the assistant a question" autocomplete="off" enterkeyhint="send">
         <button type="submit" class="primary">Ask</button>
     </form>
     
     <script>
+        const BUBBLE_USER = 'align-self: flex-end; background: var(--brand); color: white; padding: 0.6rem 1rem; border-radius: 1rem 1rem 0 1rem; max-width: 80%;';
+        const BUBBLE_BOT = 'align-self: flex-start; background: var(--info-soft); color: var(--ink); padding: 0.6rem 1rem; border-radius: 1rem 1rem 1rem 0; max-width: 80%;';
+
+        function addBubble(history, style) {
+            const div = document.createElement('div');
+            div.setAttribute('style', style);
+            history.appendChild(div);
+            history.scrollTop = history.scrollHeight;
+            return div;
+        }
+
         async function handleChat(e) {
             e.preventDefault();
             const input = document.getElementById('chat-input');
             const history = document.getElementById('chat-history');
             const question = input.value;
             if (!question.trim()) return;
-            
-            // Add User message
-            history.innerHTML += `<div style="align-self: flex-end; background: var(--brand); color: white; padding: 0.6rem 1rem; border-radius: 1rem 1rem 0 1rem; max-width: 80%;">${question}</div>`;
+
+            // The user's own text is inserted as plain text, never parsed as
+            // HTML, so typing markup cannot inject script (XSS).
+            addBubble(history, BUBBLE_USER).textContent = question;
             input.value = '';
-            
-            // Show loading
-            const loadingId = 'loading-' + Date.now();
-            history.innerHTML += `<div id="${loadingId}" style="align-self: flex-start; background: var(--info-soft); color: var(--ink); padding: 0.6rem 1rem; border-radius: 1rem 1rem 1rem 0; max-width: 80%; font-style: italic;">Thinking...</div>`;
-            history.scrollTop = history.scrollHeight;
-            
+
+            const pending = addBubble(history, BUBBLE_BOT + ' font-style: italic;');
+            pending.textContent = 'Thinking...';
+
             try {
                 const res = await fetch('{{ url_for("ask_assistant") }}', {
                     method: 'POST',
@@ -105,12 +117,13 @@
                     body: JSON.stringify({ question: question })
                 });
                 const data = await res.json();
-                
-                document.getElementById(loadingId).remove();
-                history.innerHTML += `<div style="align-self: flex-start; background: var(--info-soft); color: var(--ink); padding: 0.6rem 1rem; border-radius: 1rem 1rem 1rem 0; max-width: 80%;">${data.answer}</div>`;
-                history.scrollTop = history.scrollHeight;
+                pending.remove();
+                // The answer is a server-built HTML fragment (<strong> emphasis)
+                // in which every user-controlled value is already escaped.
+                addBubble(history, BUBBLE_BOT).innerHTML = data.answer;
             } catch (err) {
-                document.getElementById(loadingId).innerText = "Error connecting to assistant.";
+                pending.style.fontStyle = 'normal';
+                pending.textContent = 'Error connecting to assistant.';
             }
         }
     </script>
