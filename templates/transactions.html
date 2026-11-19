@@ -7,7 +7,8 @@
 deduplicates it for you. Correct anything it gets wrong — it learns from every
 correction.</p>
 
-<div class="grid {% if demo_features %}three{% else %}two{% endif %}" style="margin-bottom:1.25rem;">
+{# Two columns in both builds: 4 cards (demo) or 2 (spec-only) fill it evenly. #}
+<div class="grid two" style="margin-bottom:1.25rem;">
     {% if demo_features %}
     <div class="card">
         <h2>Sync with Bank</h2>
@@ -37,6 +38,57 @@ correction.</p>
             </div>
             <p class="hint" style="margin-bottom: 1rem;">CSV only, up to 5MB. Duplicates are skipped safely.</p>
             <button type="submit" style="width: 100%;">Upload and categorise</button>
+        </form>
+    </div>
+
+    <div class="card" id="add-transaction">
+        <h2>Add a cash transaction</h2>
+        <p class="muted" style="margin-top:0;">For money that won't appear on a
+        bank statement: a minibus fare, market produce, cash you were paid.
+        Card and mobile-money payments arrive with your statement, so adding
+        them here as well would count them twice.</p>
+        <p class="muted">Cash you take out at an ATM or a mobile-money agent is
+        filed as <strong>Cash Withdrawal</strong> and not counted as spending, so
+        log what you spend the cash on here.</p>
+        <form method="POST" action="{{ url_for('add_transaction') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div class="grid two">
+                <div class="field">
+                    <label for="add_description">What was it for?</label>
+                    <input type="text" id="add_description" name="description" required
+                           maxlength="120" placeholder="e.g. Minibus fare" autocomplete="off">
+                </div>
+                <div class="field">
+                    <label for="add_amount">Amount ({{ currency }})</label>
+                    <input type="number" id="add_amount" name="amount" step="0.01" min="0.01"
+                           required inputmode="decimal" placeholder="0.00">
+                </div>
+                <div class="field">
+                    <label for="add_date">Date</label>
+                    <input type="date" id="add_date" name="transaction_date"
+                           value="{{ now.strftime('%Y-%m-%d') }}"
+                           max="{{ now.strftime('%Y-%m-%d') }}" required>
+                </div>
+                <div class="field">
+                    <label for="add_type">Money in or out?</label>
+                    <select id="add_type" name="transaction_type">
+                        <option value="DEBIT" selected>Spent (money out)</option>
+                        <option value="CREDIT">Received (money in)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="field">
+                <label for="add_category">Category</label>
+                <select id="add_category" name="category_name">
+                    <option value="">Choose for me</option>
+                    {% for category in categories %}
+                    <option value="{{ category['category_name'] }}">{{ category['category_name'] }}</option>
+                    {% endfor %}
+                </select>
+                <p class="hint">Leave it to the app, or pick one; the categoriser
+                learns from the ones you pick.</p>
+            </div>
+            <button type="submit" style="width: 100%;">Add transaction</button>
         </form>
     </div>
 </div>
@@ -69,6 +121,11 @@ correction.</p>
     <form method="GET" class="split no-print" style="margin-bottom:1rem;">
         <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;">
             <div>
+                <label for="q">Search merchant</label>
+                <input type="text" id="q" name="q" value="{{ search_query or '' }}"
+                       placeholder="e.g. Shoprite, ZESCO" class="small" style="width: 11.5rem;">
+            </div>
+            <div>
                 <label for="category">Category</label>
                 <select id="category" name="category" class="small">
                     <option value="">All categories</option>
@@ -90,10 +147,10 @@ correction.</p>
                 </select>
             </div>
             <button type="submit" class="secondary small">Filter</button>
-            {% if selected_category or selected_month %}
+            {% if selected_category or selected_month or search_query %}
             <a class="button secondary small" href="{{ url_for('transactions') }}">Clear</a>
             {% endif %}
-            <a class="button secondary small" href="{{ url_for('export_transactions', category=selected_category, month=selected_month) }}">Export CSV</a>
+            <a class="button secondary small" href="{{ url_for('export_transactions', category=selected_category, month=selected_month, q=search_query) }}">Export CSV</a>
         </div>
         <span class="muted">{{ transactions|length }} shown</span>
     </form>
@@ -224,7 +281,7 @@ correction.</p>
         {% if total_pages > 1 %}
         <div style="display: flex; justify-content: center; gap: 10px; margin-top: 1rem;" class="no-print">
             {% if page > 1 %}
-            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, page=page-1) }}" class="button small secondary">&laquo; Previous</a>
+            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, q=search_query, page=page-1) }}" class="button small secondary">&laquo; Previous</a>
             {% else %}
             <button class="small secondary" disabled>&laquo; Previous</button>
             {% endif %}
@@ -232,7 +289,7 @@ correction.</p>
             <span style="display: flex; align-items: center;">Page {{ page }} of {{ total_pages }}</span>
             
             {% if page < total_pages %}
-            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, page=page+1) }}" class="button small secondary">Next &raquo;</a>
+            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, q=search_query, page=page+1) }}" class="button small secondary">Next &raquo;</a>
             {% else %}
             <button class="small secondary" disabled>Next &raquo;</button>
             {% endif %}

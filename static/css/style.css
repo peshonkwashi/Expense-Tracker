@@ -564,3 +564,14 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
     border-color: var(--btn-bg);
 }
 
+
+/* --- Assistant suggestion chips ------------------------------------------ */
+.chat-suggestions { display: flex; flex-wrap: wrap; gap: .45rem; margin-bottom: .75rem; }
+.chat-suggestions .chip {
+    background: var(--surface); color: var(--brand); border: 1px solid var(--line);
+    border-radius: 999px; padding: .35rem .8rem; font-size: .85rem; font-weight: 600;
+    min-height: 0; width: auto; cursor: pointer;
+}
+.chat-suggestions .chip:hover, .chat-suggestions .chip:focus-visible { border-color: var(--brand); }
+#chat-history ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+@media (max-width: 768px) { .chat-suggestions .chip { min-height: 2.5rem; } }

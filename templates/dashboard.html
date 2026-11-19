@@ -70,14 +70,23 @@
 
 {% if demo_features %}
 <div class="card" style="margin-bottom:1.25rem;">
-    <h2>AI Financial Assistant (Mock)</h2>
-    <p class="muted">Ask me questions about your spending! E.g. "How much did I spend on food this month?" or "Can I afford a new jacket?"</p>
+    <h2>Financial assistant</h2>
+    <p class="muted">Ask about your spending, budgets, payday, goals or
+    subscriptions in plain English. It answers from your own data on this
+    device; nothing you type is sent anywhere.</p>
     
     {# role=log + aria-live: screen readers announce each new answer as it arrives. #}
     <div id="chat-history" role="log" aria-live="polite" aria-label="Assistant conversation" style="min-height: 100px; max-height: 300px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.8rem;">
         <!-- Chat bubbles will go here -->
     </div>
     
+    <div id="chat-suggestions" class="chat-suggestions" aria-label="Suggested questions">
+        {% for text in ['How much have I spent this month?', 'How much do I have left?',
+                        'Can I afford K500?', 'When is payday?'] %}
+        <button type="button" class="chip" data-question="{{ text }}">{{ text }}</button>
+        {% endfor %}
+    </div>
+
     <form id="chat-form" style="display: flex; gap: 0.5rem;" onsubmit="handleChat(event)">
         <input type="text" id="chat-input" placeholder="Ask your assistant..." style="flex: 1;" required
                aria-label="Ask the assistant a question" autocomplete="off" enterkeyhint="send">
@@ -95,6 +104,27 @@
             history.scrollTop = history.scrollHeight;
             return div;
         }
+
+        // Suggestion chips: tapping one asks it. The server sends fresh
+        // follow-ups with every answer; they are inserted as text, not HTML.
+        function showSuggestions(list) {
+            const box = document.getElementById('chat-suggestions');
+            box.replaceChildren();
+            (list || []).forEach(function (text) {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'chip';
+                chip.dataset.question = text;
+                chip.textContent = text;
+                box.appendChild(chip);
+            });
+        }
+        document.getElementById('chat-suggestions').addEventListener('click', function (e) {
+            const chip = e.target.closest('.chip');
+            if (!chip) return;
+            document.getElementById('chat-input').value = chip.dataset.question;
+            handleChat(e);
+        });
 
         async function handleChat(e) {
             e.preventDefault();
@@ -122,6 +152,7 @@
                 // The answer is a server-built HTML fragment (<strong> emphasis)
                 // in which every user-controlled value is already escaped.
                 addBubble(history, BUBBLE_BOT).innerHTML = data.answer;
+                showSuggestions(data.suggestions);
             } catch (err) {
                 pending.style.fontStyle = 'normal';
                 pending.textContent = 'Error connecting to assistant.';

@@ -27,7 +27,7 @@ A layered testing strategy was adopted, matching the system's five-layer
 architecture so that each layer could be verified independently. Four
 complementary types of testing were applied:
 
-- **Automated testing** — a suite of 288 unit, integration and end-to-end tests
+- **Automated testing** — a suite of 326 unit, integration and end-to-end tests
   exercising the data, machine-learning, service and presentation layers,
   providing repeatable regression evidence.
 - **Machine-learning verification** — quantitative measurement of the two learning
@@ -332,13 +332,13 @@ run):
 ## 7. Automated regression suite
 
 Final run on 2026-11-19, after every fix in §8 and the post-UAT features in
-§7.1, using full test discovery (`python -m unittest discover -s tests -t .`)
+§7.1 and §7.2, using full test discovery (`python -m unittest discover -s tests -t .`)
 in the project virtual-env. (The previous run, on 2026-11-18 before those
 features, was 240 / 240.)
 
 | Suite | Tests | Covers | Result |
 |-------|:-----:|--------|:------:|
-| `tests/test_routes.py` | 93 | Pages, auth, security controls, PWA, demo features. Includes `test_nfr01_core_pages_render_within_three_seconds`, the 6 security regression tests (D6–D9), 3 timer tests (lockout expiry, idle sign-out after 10 minutes, the idle timer refreshing on activity), the offline-mode indicator (D15 diagnostic), and the post-UAT features (§7.1): password reset and change, profile editing, email-receipt import and statement merging, and the theme setting, with regression tests for D16–D20 | PASS |
+| `tests/test_routes.py` | 117 | Pages, auth, security controls, PWA, demo features. Includes `test_nfr01_core_pages_render_within_three_seconds`, the 6 security regression tests (D6–D9), 3 timer tests (lockout expiry, idle sign-out after 10 minutes, the idle timer refreshing on activity), the offline-mode indicator (D15 diagnostic), and the post-UAT features (§7.1): password reset and change, profile editing, email-receipt import and statement merging, the theme setting, and the §7.2 features (cash entry, search, goal editing, per-category MAE, backup and restore, cash withdrawals), with regression tests for D16–D25 | PASS |
 | `tests/test_ml.py` | 43 | Categoriser training/evaluation, forecasting, subscriptions | PASS |
 | `tests/test_ingestion.py` | 42 | CSV parsing, validation, deduplication, atomic import (NFR-06), salary detection across a promotion | PASS |
 | `tests/test_services.py` | 35 | Budget recommendations, nudges, savings, reports | PASS |
@@ -346,7 +346,8 @@ features, was 240 / 240.)
 | `tests/test_insights.py` | 17 | Smart Suggestions rules | PASS |
 | `tests/test_end_to_end.py` | 9 | Statement → dashboard integration — incl. the NFR-02 and NFR-03 target tests | PASS |
 | `tests/test_imap.py` | 26 | Email receipts, network-free: read-only mailbox access, body and attachment parsing, receipt-to-transaction matching, inbox sweep (including the Gmail Purchases tab), free-trial detection, currency detection and conversion | PASS |
-| **Total** | **288** | | **288 / 288 PASS** (exit 0, 0 skipped, 271 s) |
+| `tests/test_assistant.py` | 14 | On-device assistant: question parsing into intent, category, merchant and period, including follow-up questions (no database) | PASS |
+| **Total** | **326** | | **326 / 326 PASS** (exit 0, 0 skipped, 315 s) |
 
 ### Live end-to-end functional run — PC, mobile and spec-only build
 
@@ -450,6 +451,38 @@ the browser at 375 px and at desktop width; the desktop table is unchanged.
    a real inbox was carried out informally by the developer and is not recorded
    as evidence.
 
+### 7.2 Second post-UAT batch (2026-11-19)
+
+Five more features were added later the same day. Their review found five
+defects, which were fixed before the features were committed (D21–D25, §8).
+They are covered by the automated suite; the live journeys in §7 were run
+before this batch and were not repeated.
+
+| Feature | What was tested | Tests | Result |
+|---------|-----------------|:-----:|:------:|
+| **Cash transaction entry** (Transactions) | A cash purchase is stored and auto-categorised, or filed under the category picked; cash received is filed as Income; each entry is unique, so two identical bus fares are two rows | 3 | PASS |
+| **Cash withdrawals are not spending** | ATM, cash-back and mobile-money agent withdrawals are recognised by rule, before the model, as *Cash Withdrawal* ("treatment" and similar words are not); a K500 withdrawal followed by K200 of logged cash spending counts K200, in the budget and in the assistant's total (D25); existing withdrawals filed as Transfers are moved by a one-time migration, except where the user chose the label | 4 | PASS |
+| **Merchant search** | Filters the list and the CSV export; keeps the filter across pages; `%` and `_` match literally (D24) | 2 | PASS |
+| **Editable savings goals** | Name, target and date update; "nan", "inf" and implausibly large targets rejected when adding or editing (D23) | 2 | PASS |
+| **Per-category forecast MAE** (Settings) | Shown next to the monthly-total figure and checked against the 15 % NFR-03 target; read from its own database column, with older records falling back to the notes | 2 | PASS |
+| **Backup and restore** (Settings) | The backup downloads as a `.zip` holding one database, which phones can store and share (D22); restore accepts the `.zip` or a plain `.db` from older backups; needs the current password (D21); rejects files that are not backups, are damaged, or contain triggers; keeps a safety copy of the current data (newest 3 kept); retrains the categoriser on the restored data | 6 | PASS |
+
+**Backups on phones.** Neither Android nor iOS recognises a `.db` file, so a
+downloaded database may be refused or renamed, and the iPhone's file picker
+greys out unrecognised types. The backup is therefore a `.zip`, which both
+phones' Files apps handle natively; it is also about five times smaller (34 KB
+against 172 KB for the demo database). Where the browser can share files, a
+*Share backup…* button hands the zip to the phone's share sheet (Google Drive,
+iCloud Files, WhatsApp, email). The restore picker no longer filters by file
+type, so nothing is greyed out; the server validates the file instead.
+
+**Limitation recorded for Chapter 9.** Excluding withdrawals from spending
+assumes the user logs what the cash is spent on. Cash that is withdrawn and
+never logged disappears from the spending totals, so a heavy cash user who
+does not log purchases will see spending under-reported. The alternative,
+counting withdrawals as spending, double-counts every logged cash purchase,
+which was judged the worse error.
+
 ### NFR-05 — nothing transmitted off the device
 
 NFR-05 requires that no data leaves the user's machine. It was re-verified on
@@ -502,7 +535,7 @@ connection.
 
 Defects came from four sources: performance measurement (§4), a structured code
 and mobile review carried out after the UAT, the review of the features added
-after the UAT (§7.1), and the UAT itself. Every defect in
+after the UAT (§7.1, §7.2), and the UAT itself. Every defect in
 the first table was **found, fixed and re-verified**, each with a regression test
 or a recorded browser/HTTP check. The second table holds the UAT usability
 observations, which were investigated and found *not* to be functional defects.
@@ -529,6 +562,11 @@ presentation only.
 | D18 | Review of change password (§7.1) | **Unlimited guesses at the current password** from a signed-in device | The change-password form checked the password without the sign-in throttle | Minor (security) | Wrong guesses count towards the same 5-try lockout as sign-in | Regression test (locked out after 5; password unchanged) |
 | D19 | Review of profile editing (§7.1) | **Password protection could be bypassed**: anyone at an unlocked device could set the name, salary and pay day to known values, sign out and reset the password | Those three details are the reset key, but editing them did not require the password | Major (security) | Saving profile changes requires the current password and shares the lockout | Regression test (blank or wrong password → profile unchanged) |
 | D20 | Review of the email-receipt fetcher (§7.1) | The fetcher **rarely found a receipt**: it read attachments only, searched relative to *today* rather than the purchase date, and needed credentials set as environment variables | Most e-receipts (ride-hailing, food delivery, online shops) carry the items in the email body, with no attachment | Major (demo feature) | Email body (HTML or text) parsed first, attachment OCR as fallback; search window centred on each transaction date; matching by amount; credentials entered in Settings | 23 network-free unit tests; developer test against a live mailbox (informal) |
+| D21 | Review of restore (§7.2) | **Restore did not ask for the password** and overwrote the live database with a plain file copy | A restore replaces all data, including the password; a file copy taken mid-write can produce an inconsistent database | Minor (security) | Restore needs the current password and shares the sign-in lockout; copies use SQLite's online backup API; files containing triggers are refused | 4 regression tests (wrong password → nothing changed; triggers refused; .zip and .db restore) |
+| D22 | Review of backup (§7.2) | **Backups could not be handled on phones** | The backup was a bare `.db` file, a type neither Android nor iOS recognises | Minor (functional, NFR-08) | Backup is a `.zip`; *Share backup…* on phones; restore accepts both | Regression test (zip holds one valid SQLite database); checked at 375 px |
+| D23 | Review of savings goals (§7.2) | A goal could be saved with a target of **"nan" or "inf"** | `float()` accepts both, and a `<= 0` check is false for NaN | Minor (functional) | One validator for adding and editing goals: positive, finite, at most the amount ceiling | Regression test (nan, inf, 1e300 rejected) |
+| D24 | Review of search (§7.2) | Searching for `%` or `_` matched everything | The search term went into a SQL `LIKE` pattern unescaped | Cosmetic | Wildcards escaped (`LIKE … ESCAPE '!'`) | Regression test |
+| D25 | Review of cash entry (§7.2) | **Cash spending was counted twice**: a K500 ATM withdrawal plus K200 of logged cash purchases showed K700 spent | Withdrawals were filed under Transfers, which counts as spending | Major (budget accuracy) | New *Cash Withdrawal* category, assigned by rule and excluded from every spending total (forecasts, budget, report, insights, subscriptions, assistant); existing rows migrated | 4 regression tests (§7.2) |
 
 ¹ The assistant is a demo extension in a single-user, locally hosted app, so in
 practice this is self-XSS. It is graded Major because it would be exploitable as
@@ -569,10 +607,12 @@ behaviour.
 | NFR-05 Security / local-only | Nothing transmitted off-device | 0 external connections over 338 samples while all three journeys ran (process monitor, 2026-11-19); 40/40 browser requests local; no external URLs in source; the opt-in email-receipt scan (mailbox + exchange rates, demo build only) is the documented exception (§7) | **PASS** |
 | NFR-08 Compatibility | Chrome/Edge, desktop + mobile | Chrome 152 desktop + 375 px; Edge 157 (service worker confirmed); Samsung Galaxy S25+ (Android 17, Chrome), installed as a PWA; iPhone 13 (iOS 27.2.1, Safari) — all tested features except the offline page (D15, open) (§5.1); Firefox out of scope by decision (§6) | **PASS** (D15 open on iOS) |
 
-Fourteen defects (D5–D13 and D16–D20, §8) were found and resolved: one
-requirement breach (NFR-01), seven security issues, one broken documented
-install path, three mobile layout/usability issues, one crash (D16) and one
-demo feature that rarely worked (D20). Each was re-verified after its fix. One defect
+Nineteen defects (D5–D13 and D16–D25, §8) were found and resolved: one
+requirement breach (NFR-01), eight security issues, one broken documented
+install path, four mobile or usability issues (including backups on phones,
+D22), one crash (D16), one demo feature that rarely worked (D20), the double
+counting of cash spending (D25) and two input-handling faults (D23, D24). Each
+was re-verified after its fix. One defect
 remains **open**: the offline fallback on iOS (D15, Minor). Its two likely causes
 are documented with a next step in §8.
 

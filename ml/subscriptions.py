@@ -17,12 +17,14 @@ import statistics
 from datetime import datetime
 
 import config
+import database
 from ml.categorization import normalise
 
 RECURRING_QUERY = (
     "SELECT transaction_id, transaction_date, description, amount "
     "FROM Transaction_Record "
     "WHERE user_id = ? AND transaction_type = 'DEBIT' AND is_salary = 0 "
+    "AND " + database.spending_filter() + " "
     "ORDER BY transaction_date"
 )
 

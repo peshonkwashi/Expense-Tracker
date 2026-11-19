@@ -57,6 +57,17 @@
                             {% endif %}
                         {% else %}—{% endif %}
                     </td></tr>
+                {% if per_category_mae_ratio is not none %}
+                <tr><td>Per-category error (NFR-03)</td>
+                    <td class="num">
+                        {{ (per_category_mae_ratio * 100)|round(1) }}%
+                        {% if per_category_mae_ratio <= max_mae_ratio %}
+                            <span class="badge ok">within {{ (max_mae_ratio * 100)|int }}%</span>
+                        {% else %}
+                            <span class="badge warning">above {{ (max_mae_ratio * 100)|int }}%</span>
+                        {% endif %}
+                    </td></tr>
+                {% endif %}
                 <tr><td>Months of history</td><td class="num">{{ forecasting_metric['sample_count'] }}</td></tr>
                 <tr><td>Last evaluated</td><td class="num">{{ forecasting_metric['trained_at'] }}</td></tr>
             </table>
@@ -154,7 +165,43 @@
         <li>Every database query is parameterised, so a merchant name in a
         statement cannot alter a query.</li>
     </ul>
-    <a class="button" href="{{ url_for('export_database') }}">Download a backup</a>
+    <h3 style="margin-top:1.25rem;">Back up</h3>
+    <p class="muted">Saves everything as one <code>.zip</code> file, which phones
+    and computers can both store: in Files or Downloads, on Google Drive or
+    iCloud, or sent to yourself.</p>
+    <div class="form-actions">
+        <a class="button" href="{{ url_for('export_database') }}" id="backup-download">Download a backup</a>
+        {# Shown by pwa.js only where the browser can hand files to other apps
+           (the phone's share sheet). #}
+        <button type="button" class="secondary" id="backup-share" hidden>Share backup…</button>
+    </div>
+    <p class="muted" id="backup-share-status" aria-live="polite" style="margin:.4rem 0 0;font-size:.85rem;"></p>
+
+    <h3 style="margin-top:1.25rem;">Restore</h3>
+    <p class="muted">Replaces <strong>all</strong> of the app's current data with
+    the backup. Your current data is kept first as a safety copy next to the
+    database. After restoring, sign in with the password that was in use when
+    the backup was made.</p>
+    <form method="POST" action="{{ url_for('restore_database') }}" enctype="multipart/form-data"
+          onsubmit="return confirm('Replace all current data with this backup? A safety copy of your current data is kept.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <div class="grid two">
+            <div class="field">
+                <label for="backup_file">Backup file (.zip, or .db from older backups)</label>
+                {# No accept= filter: an iPhone greys out file types it doesn't
+                   recognise, and the server checks the file anyway. #}
+                <input type="file" id="backup_file" name="backup_file" required>
+            </div>
+            <div class="field">
+                <label for="restore_current_password">Current password</label>
+                <input type="password" id="restore_current_password" name="current_password"
+                       required autocomplete="current-password">
+            </div>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="secondary">Restore backup</button>
+        </div>
+    </form>
 </div>
 
 <div class="card">

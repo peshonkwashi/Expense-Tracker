@@ -69,9 +69,15 @@ RULE_SEED = [
     (r'\b(mr\s*price|jet\b|truworths|edgars|pep\b|woolworths|clothing|boutique|'
      r'electronics|hardware|furniture|jumia|shopping)\b', 'Shopping'),
     (r'\b(salon|barber|spa\b|cosmetic|beauty|gym|fitness)\b', 'Personal Care'),
-    (r'\b(transfer|sent\s*to|mobile\s*money|momo|zoona|western\s*union|'
-     r'atm\s*withdrawal|cash\s*withdrawal)\b', 'Transfers'),
+    (r'\b(transfer|sent\s*to|mobile\s*money|momo|zoona|western\s*union)\b',
+     'Transfers'),
 ]
+
+# Cash taken out of the account: an ATM, a cash-back, or a mobile-money
+# agent cash-out. Checked first in rule_category() and classify().
+WITHDRAWAL_PATTERN = re.compile(
+    r'\b(atm|cash\s*withdrawal|cash\s*out|cashout|cash\s*back|'
+    r'agent\s*withdrawal)\b', re.IGNORECASE)
 
 _COMPILED_RULES = [(re.compile(p, re.IGNORECASE), name) for p, name in RULE_SEED]
 
@@ -118,6 +124,8 @@ def rule_category(description):
     text = normalise(description)
     if not text:
         return None
+    if WITHDRAWAL_PATTERN.search(description or ''):
+        return database.CASH_WITHDRAWAL
     for pattern, name in _COMPILED_RULES:
         if pattern.search(text):
             return name
@@ -158,6 +166,10 @@ def classify(description, amount=None, transaction_date=None):
     labelled the way it was (section 5.9, explainability).
     """
     text = normalise(description)
+    # Whether money counts as spending must not depend on a model's guess, so
+    # a withdrawal is recognised by rule before the model is asked.
+    if WITHDRAWAL_PATTERN.search(description or ''):
+        return database.CASH_WITHDRAWAL, 1.0, 'rule'
     pipeline = _load_model()
 
     if pipeline is not None and text:

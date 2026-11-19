@@ -301,5 +301,63 @@
             boxes.forEach(function (box) { setVisible(box, false); });
         });
     });
+
+    /* Settings → "Share backup…": on phones, hand the backup .zip to the share
+     * sheet (Drive, iCloud Files, WhatsApp, email…) instead of leaving it in
+     * Downloads. Only shown where the browser can share files. */
+    document.addEventListener('DOMContentLoaded', function () {
+        var button = document.getElementById('backup-share');
+        var link = document.getElementById('backup-download');
+        var status = document.getElementById('backup-share-status');
+        if (!button || !link || !navigator.canShare || !window.File) return;
+        try {
+            var probe = new File(['x'], 'probe.zip', { type: 'application/zip' });
+            if (!navigator.canShare({ files: [probe] })) return;
+        } catch (e) { return; }
+        var label = button.textContent;
+        var prepared = null;   // the backup File, once downloaded
+
+        function share(file) {
+            return navigator.share({ files: [file], title: file.name }).then(function () {
+                prepared = null;
+                button.textContent = label;
+                status.textContent = '';
+            }, function (error) {
+                if (error && error.name === 'AbortError') {
+                    status.textContent = '';   // the user closed the share sheet
+                } else if (error && error.name === 'NotAllowedError') {
+                    // Safari only shares straight from a tap, and preparing the
+                    // file took too long. It is ready now, so a second tap works.
+                    button.textContent = 'Tap again to share';
+                    status.textContent = 'The backup is ready.';
+                } else {
+                    prepared = null;
+                    button.textContent = label;
+                    status.textContent = 'Sharing didn’t work here. Use ' +
+                        '"Download a backup" instead.';
+                }
+            });
+        }
+
+        button.hidden = false;
+        button.addEventListener('click', function () {
+            if (prepared) { share(prepared); return; }
+            button.disabled = true;
+            status.textContent = 'Preparing the backup…';
+            fetch(link.href, { credentials: 'same-origin' }).then(function (response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                var match = /filename="?([^";]+)"?/.exec(
+                    response.headers.get('Content-Disposition') || '');
+                var name = match ? match[1] : 'expense_tracker-backup.zip';
+                return response.blob().then(function (blob) {
+                    prepared = new File([blob], name, { type: 'application/zip' });
+                    return share(prepared);
+                });
+            }).catch(function () {
+                status.textContent = 'The backup could not be prepared. Use ' +
+                    '"Download a backup" instead.';
+            }).then(function () { button.disabled = false; });
+        });
+    });
 })();
 

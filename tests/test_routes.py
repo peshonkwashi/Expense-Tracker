@@ -4,6 +4,7 @@ Uses Flask's test client against a throwaway database so no test touches the
 real expense_tracker.db.
 """
 import io
+import re
 import os
 import sys
 import tempfile
@@ -1042,7 +1043,7 @@ class DemoFeatureFlagTests(RouteTestCase):
 
     def test_demo_entry_points_present_by_default(self):
         dashboard = self.client.get('/').data
-        self.assertIn(b'AI Financial Assistant', dashboard)
+        self.assertIn(b'<h2>Financial assistant</h2>', dashboard)
         self.assertIn(b'Household', dashboard)  # nav link
         self.assertEqual(self.client.get('/household').status_code, 200)
         self.assertIn(b'Sync with Bank', self.client.get('/transactions').data)
@@ -1053,7 +1054,7 @@ class DemoFeatureFlagTests(RouteTestCase):
         config.DEMO_FEATURES = False
         try:
             dashboard = self.client.get('/').data
-            self.assertNotIn(b'AI Financial Assistant', dashboard)
+            self.assertNotIn(b'<h2>Financial assistant</h2>', dashboard)
             self.assertNotIn(b'Household', dashboard)
             self.assertNotIn(b'Sync with Bank',
                              self.client.get('/transactions').data)
@@ -1293,6 +1294,375 @@ class UATAndPerformanceTests(RouteTestCase):
             'password': 'new-strong-password-456',
             'password_confirm': 'new-strong-password-456'}, follow_redirects=True)
         self.assertIn(b'Your password has been reset', new.data)
+
+
+class AssistantRouteTests(RouteTestCase):
+    """The on-device assistant answered over HTTP, with session follow-ups."""
+
+    def setUp(self):
+        super().setUp()
+        if not config.DEMO_FEATURES:
+            self.skipTest('assistant is a demo feature')
+        self.complete_setup()
+
+    def _add(self, description, amount, category='', when=None):
+        from datetime import date
+        return self.client.post('/transactions/add', data={
+            'description': description, 'amount': amount,
+            'transaction_date': (when or date.today()).isoformat(),
+            'transaction_type': 'DEBIT', 'category_name': category,
+        }, follow_redirects=True)
+
+    def ask(self, question):
+        response = self.client.post('/ask-assistant', json={'question': question})
+        self.assertEqual(response.status_code, 200)
+        return response.get_json()
+
+    def test_category_spend_this_month(self):
+        self._add('Yango ride town', '45.00', category='Transport')
+        self._add('Bus fare', '15.00', category='Transport')
+        self._add('Shoprite bread', '30.00', category='Groceries')
+        answer = self.ask('how much did I spend on transport?')['answer']
+        self.assertIn('K60.00', answer)
+        self.assertIn('2 transactions', answer)
+
+    def test_follow_up_reuses_the_subject_from_the_session(self):
+        from datetime import date, timedelta
+        last_month = date.today().replace(day=1) - timedelta(days=1)
+        self._add('Yango ride town', '45.00', category='Transport')
+        self._add('Yango ride home', '80.00', category='Transport', when=last_month)
+        self.assertIn('K45.00', self.ask('how much on transport this month?')['answer'])
+        follow = self.ask('and last month?')['answer']
+        self.assertIn('K80.00', follow)
+        self.assertIn('Transport', follow)
+
+    def test_merchant_spend(self):
+        self._add('Shoprite Cairo Rd', '120.00', category='Groceries')
+        self._add('Pick n Pay Arcades', '70.00', category='Groceries')
+        answer = self.ask('how much at shoprite?')['answer']
+        self.assertIn('K120.00', answer)
+        self.assertNotIn('190.00', answer)
+
+    def test_afford_uses_the_amount(self):
+        answer = self.ask('can I afford K999999?')['answer']
+        self.assertIn('Not this month', answer)
+        self.assertIn('K999,999.00', answer)
+
+    def test_payday_and_suggestions(self):
+        reply = self.ask('when is payday?')
+        self.assertIn('next payday', reply['answer'])
+        self.assertTrue(reply['suggestions'])
+
+    def test_transaction_descriptions_are_escaped(self):
+        # Descriptions come from bank files and appear in "recent" and "top
+        # places" answers, so they must be escaped like category names.
+        self._add('<img src=x onerror=alert(1)>', '10.00', category='Shopping')
+        for question in ('show my recent transactions', 'top shops this month'):
+            with self.subTest(question=question):
+                answer = self.ask(question)['answer']
+                self.assertNotIn('<img', answer)
+                self.assertIn('&lt;img', answer)
+
+    def test_long_or_odd_input_never_errors(self):
+        for question in ('', '   ', '?' * 1000, 'k k k 1e999', '<script>', 'may may may'):
+            with self.subTest(question=question[:20]):
+                self.assertTrue(self.ask(question)['answer'])
+
+
+class CashWithdrawalTests(RouteTestCase):
+    """Option 1: an ATM or agent withdrawal moves money into the wallet; the
+    spending is the cash purchases logged afterwards, so withdrawals never
+    count as spending (no double counting)."""
+
+    def setUp(self):
+        super().setUp()
+        self.complete_setup()
+
+    def _add(self, description, amount, category=''):
+        from datetime import date
+        return self.client.post('/transactions/add', data={
+            'description': description, 'amount': amount,
+            'transaction_date': date.today().isoformat(),
+            'transaction_type': 'DEBIT', 'category_name': category,
+        }, follow_redirects=True)
+
+    def test_withdrawals_are_recognised_by_rule(self):
+        from ml import categorization
+        for text in ('ATM WITHDRAWAL MANDA HILL', 'Cash Out at Airtel Money Agent',
+                     'MTN MoMo Agent cash out', 'Cash withdrawal - Stanbic'):
+            with self.subTest(text=text):
+                self.assertEqual(categorization.classify(text)[0], 'Cash Withdrawal')
+        # Words merely containing "atm" are not withdrawals.
+        self.assertNotEqual(categorization.classify('Beauty spa treatment')[0],
+                            'Cash Withdrawal')
+
+    def test_withdrawal_plus_cash_purchase_is_counted_once(self):
+        import database
+        from datetime import date
+        from services import recommendation
+        self._add('ATM Withdrawal Cairo Road', '500.00')
+        self._add('Market vegetables', '200.00', category='Groceries')
+        conn = database.get_db_connection()
+        user = database.get_user(conn)
+        month = date.today().strftime('%Y-%m')
+        spent = recommendation.actual_spend(conn, user['user_id'], month)
+        conn.close()
+        self.assertNotIn('Cash Withdrawal', spent)
+        self.assertAlmostEqual(sum(spent.values()), 200.0)
+
+    def test_assistant_total_excludes_withdrawals(self):
+        self._add('ATM Withdrawal Cairo Road', '500.00')
+        self._add('Market vegetables', '200.00', category='Groceries')
+        page = self.client.get('/').data
+        token = re.search(rb"'X-CSRFToken': '([^']+)'", page)
+        headers = {'X-CSRFToken': token.group(1).decode()} if token else {}
+        answer = self.client.post('/ask-assistant', json={
+            'question': 'how much have I spent in total?'}, headers=headers).get_json()['answer']
+        self.assertIn('200.00', answer)
+        self.assertNotIn('700.00', answer)
+
+    def test_existing_withdrawals_labelled_transfers_are_migrated(self):
+        import database
+        conn = database.get_db_connection()
+        user = database.get_user(conn)
+        transfers = database.category_id_for(conn, 'Transfers')
+        rows = [('ATM WDL 0045 CAIRO RD', 'rule'), ('ATM Cash Withdrawal', 'model'),
+                ('ATM Withdrawal kept by me', 'user'), ('Sent to Mobile Wallet', 'rule')]
+        for text, source in rows:
+            conn.execute(
+                "INSERT INTO Transaction_Record (transaction_date, description, amount, "
+                "transaction_type, category_id, category_source, import_hash, user_id) "
+                "VALUES ('2026-10-01', ?, 100, 'DEBIT', ?, ?, ?, ?)",
+                (text, transfers, source, 'legacy-' + text, user['user_id']))
+        conn.commit()
+        conn.close()
+        database.init_db()   # runs the migration, as an app start would
+        conn = database.get_db_connection()
+        labels = {r['description']: r['category_name'] for r in conn.execute(
+            'SELECT t.description, c.category_name FROM Transaction_Record t '
+            'JOIN Category c ON t.category_id = c.category_id')}
+        conn.close()
+        self.assertEqual(labels['ATM WDL 0045 CAIRO RD'], 'Cash Withdrawal')
+        self.assertEqual(labels['ATM Cash Withdrawal'], 'Cash Withdrawal')
+        self.assertEqual(labels['ATM Withdrawal kept by me'], 'Transfers')  # user's choice
+        self.assertEqual(labels['Sent to Mobile Wallet'], 'Transfers')
+
+
+class FiveImprovementsTests(RouteTestCase):
+    """Tests for manual cash transaction entry, merchant search, editing savings
+    goals, per-category forecast MAE badge, and database restore."""
+
+    def setUp(self):
+        super().setUp()
+        self.complete_setup()
+
+    def test_add_single_transaction_auto_categorises_and_stores(self):
+        from datetime import date
+        today = date.today().isoformat()
+        response = self.client.post('/transactions/add', data={
+            'description': 'Shoprite Cairo Road',
+            'amount': '245.50',
+            'transaction_date': today,
+            'transaction_type': 'DEBIT',
+            'category_name': '',
+        }, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Shoprite Cairo Road', response.data)
+        self.assertIn(b'245.50 ZMW) under Groceries.', response.data)
+
+    def test_search_transactions_filters_by_merchant_and_export(self):
+        from datetime import date
+        today = date.today().isoformat()
+        self.client.post('/transactions/add', data={
+            'description': 'Shoprite Manda Hill',
+            'amount': '300.00',
+            'transaction_date': today,
+            'transaction_type': 'DEBIT',
+        }, follow_redirects=True)
+        self.client.post('/transactions/add', data={
+            'description': 'ZESCO Prepaid Token',
+            'amount': '150.00',
+            'transaction_date': today,
+            'transaction_type': 'DEBIT',
+        }, follow_redirects=True)
+
+        filtered = self.client.get('/transactions?q=zesco').data
+        self.assertIn(b'ZESCO Prepaid Token', filtered)
+        self.assertNotIn(b'Shoprite Manda Hill', filtered)
+
+        exported = self.client.get('/transactions/export?q=zesco').data
+        self.assertIn(b'ZESCO Prepaid Token', exported)
+        self.assertNotIn(b'Shoprite Manda Hill', exported)
+
+    def test_edit_savings_goal_updates_target_and_date(self):
+        from datetime import date, timedelta
+        first_date = (date.today() + timedelta(days=90)).isoformat()
+        updated_date = (date.today() + timedelta(days=180)).isoformat()
+
+        self.client.post('/savings', data={
+            'goal_name': 'Laptop Fund',
+            'target_amount': '8000',
+            'target_date': first_date,
+        }, follow_redirects=True)
+
+        import database
+        conn = database.get_db_connection()
+        goal_id = conn.execute('SELECT goal_id FROM SavingsGoal').fetchone()['goal_id']
+        conn.close()
+
+        res = self.client.post(f'/savings/{goal_id}/edit', data={
+            'goal_name': 'Workstation Fund',
+            'target_amount': '12500',
+            'target_date': updated_date,
+        }, follow_redirects=True)
+        self.assertEqual(res.status_code, 200)
+        self.assertIn(b'Workstation Fund', res.data)
+        self.assertIn(b'12,500.00', res.data)
+        self.assertIn(updated_date.encode('utf-8'), res.data)
+
+    def test_settings_displays_per_category_mae_badge(self):
+        import database
+        conn = database.get_db_connection()
+        user = database.get_user(conn)
+        database.record_metric(
+            conn, 'FORECASTING',
+            algorithm='ARIMA / mean',
+            mae=420.0, mae_ratio=0.052, sample_count=8,
+            notes='Hold-out month 2026-06; monthly-total MAE; 8 categories evaluated; per-category MAE ratio 0.094',
+            user_id=user['user_id'])
+        conn.commit()
+        conn.close()
+
+        html = self.client.get('/settings').data
+        self.assertIn(b'Per-category error (NFR-03)', html)
+        self.assertIn(b'9.4%', html)
+
+    def _restore(self, payload, name, password=PASSWORD):
+        return self.client.post('/settings/restore', data={
+            'backup_file': (io.BytesIO(payload), name),
+            'current_password': password,
+        }, content_type='multipart/form-data', follow_redirects=True)
+
+    def _cleanup_safety_copies(self):
+        import glob
+        for bak in glob.glob(f'{self.db_path}.pre-restore-*.bak'):
+            try:
+                os.unlink(bak)
+            except OSError:
+                pass
+
+    def test_backup_downloads_as_a_zip_holding_the_database(self):
+        # Phones don't recognise .db files; both platforms' Files apps open zips.
+        import zipfile
+        response = self.client.get('/settings/export')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, 'application/zip')
+        self.assertIn('.zip', response.headers['Content-Disposition'])
+        archive = zipfile.ZipFile(io.BytesIO(response.data))
+        names = archive.namelist()
+        self.assertEqual(len(names), 1)
+        self.assertTrue(names[0].endswith('.db'))
+        self.assertEqual(archive.read(names[0])[:16], b'SQLite format 3\x00')
+
+    def test_restore_database_validates_and_restores_backup(self):
+        self.addCleanup(self._cleanup_safety_copies)
+        backup_zip = self.client.get('/settings/export').data
+
+        # Not a backup: rejected, nothing changes.
+        bad = self._restore(b'not a sqlite file', 'bad.db')
+        self.assertIn(b'not an Expense Tracker backup', bad.data)
+
+        # A transaction added after the backup was taken...
+        from datetime import date
+        self.client.post('/transactions/add', data={
+            'description': 'Post-Backup Expense', 'amount': '99.00',
+            'transaction_date': date.today().isoformat(), 'transaction_type': 'DEBIT'})
+        self.assertIn(b'Post-Backup Expense', self.client.get('/transactions').data)
+
+        # ...is gone after restoring the .zip backup.
+        good = self._restore(backup_zip, 'expense_tracker-backup.zip')
+        self.assertIn(b'Backup restored', good.data)
+        self.assertNotIn(b'Post-Backup Expense', self.client.get('/transactions').data)
+        import glob
+        self.assertEqual(len(glob.glob(f'{self.db_path}.pre-restore-*.bak')), 1)
+
+    def test_restore_accepts_a_plain_db_from_older_backups(self):
+        self.addCleanup(self._cleanup_safety_copies)
+        import zipfile
+        archive = zipfile.ZipFile(io.BytesIO(self.client.get('/settings/export').data))
+        raw_db = archive.read(archive.namelist()[0])
+        response = self._restore(raw_db, 'old-backup.db')
+        self.assertIn(b'Backup restored', response.data)
+
+    def test_restore_needs_the_current_password(self):
+        backup_zip = self.client.get('/settings/export').data
+        response = self._restore(backup_zip, 'backup.zip', password='wrong-password')
+        self.assertIn(b'Enter your current password to restore', response.data)
+        import glob
+        self.assertEqual(glob.glob(f'{self.db_path}.pre-restore-*.bak'), [])
+
+    def test_restore_refuses_a_database_with_triggers(self):
+        # The app never creates triggers; one in an uploaded file would run
+        # its own SQL on later writes.
+        import sqlite3
+        import tempfile
+        import zipfile
+        raw = zipfile.ZipFile(io.BytesIO(self.client.get('/settings/export').data))
+        handle = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        handle.write(raw.read(raw.namelist()[0]))
+        handle.close()
+        self.addCleanup(os.unlink, handle.name)
+        conn = sqlite3.connect(handle.name)
+        conn.execute('CREATE TRIGGER t AFTER INSERT ON Category BEGIN '
+                     'DELETE FROM Transaction_Record; END')
+        conn.commit()
+        conn.close()
+        with open(handle.name, 'rb') as f:
+            response = self._restore(f.read(), 'tampered.db')
+        self.assertIn(b'contains triggers', response.data)
+
+    def test_search_treats_percent_and_underscore_literally(self):
+        from datetime import date
+        for name in ('Shoprite 50% off', 'Pick n Pay'):
+            self.client.post('/transactions/add', data={
+                'description': name, 'amount': '10.00',
+                'transaction_date': date.today().isoformat(), 'transaction_type': 'DEBIT'})
+        self.client.get('/transactions')  # consume the "Added ..." flashes
+        page = self.client.get('/transactions?q=%25').data   # q = "%"
+        self.assertIn(b'Shoprite 50% off', page)
+        self.assertNotIn(b'Pick n Pay', page)
+        self.assertIn(b'1 shown', page)
+
+    def test_cash_income_is_filed_as_income(self):
+        from datetime import date
+        response = self.client.post('/transactions/add', data={
+            'description': 'Cash for tutoring', 'amount': '400.00',
+            'transaction_date': date.today().isoformat(), 'transaction_type': 'CREDIT',
+        }, follow_redirects=True)
+        self.assertIn(b'under Income', response.data)
+
+    def test_savings_goal_rejects_nan_and_infinite_targets(self):
+        from datetime import date, timedelta
+        later = (date.today() + timedelta(days=60)).isoformat()
+        for amount in ('nan', 'inf', '1e300'):
+            with self.subTest(amount=amount):
+                response = self.client.post('/savings', data={
+                    'goal_name': 'Bad goal', 'target_amount': amount,
+                    'target_date': later}, follow_redirects=True)
+                self.assertNotIn(b'Savings goal &#34;Bad goal&#34; added', response.data)
+                self.assertNotIn(b'Savings goal "Bad goal" added', response.data)
+
+    def test_per_category_mae_comes_from_its_own_column(self):
+        import database
+        conn = database.get_db_connection()
+        user = database.get_user(conn)
+        database.record_metric(conn, 'FORECASTING', algorithm='ARIMA / mean',
+                               mae=420.0, mae_ratio=0.052, sample_count=8,
+                               notes='Hold-out month 2026-06', user_id=user['user_id'],
+                               per_category_mae_ratio=0.081)
+        conn.commit()
+        conn.close()
+        self.assertIn(b'8.1%', self.client.get('/settings').data)
 
 
 if __name__ == '__main__':

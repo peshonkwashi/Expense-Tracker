@@ -32,6 +32,7 @@ _MIGRATIONS = {
     'ModelMetrics': [
         ('algorithm', 'TEXT'),
         ('mae_ratio', 'REAL'),
+        ('per_category_mae_ratio', 'REAL'),
         ('sample_count', 'INTEGER'),
         ('notes', 'TEXT'),
     ],
@@ -44,6 +45,20 @@ _INDEXES = [
     ('idx_goal_user', 'SavingsGoal(user_id, target_date)'),
     ('idx_metrics_type', 'ModelMetrics(model_type, trained_at)'),
 ]
+
+
+# Withdrawing cash moves money from the account into the wallet; it is not
+# spending. The spending happens when the cash is used, and is logged with
+# "Add a cash transaction". Counting both would count the money twice, so
+# every spending total excludes this category (spending_filter below).
+CASH_WITHDRAWAL = 'Cash Withdrawal'
+
+
+def spending_filter(alias=None):
+    """SQL condition that keeps a debit only if it is real spending."""
+    column = f'{alias}.category_id' if alias else 'category_id'
+    return (f"COALESCE({column}, 0) NOT IN (SELECT category_id FROM Category "
+            f"WHERE category_name = '{CASH_WITHDRAWAL}')")
 
 
 def get_db_connection():
@@ -73,6 +88,22 @@ def _apply_migrations(conn):
         for name, ddl in columns:
             if name not in present:
                 conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
+
+    # Withdrawals labelled Transfers before 'Cash Withdrawal' existed move to
+    # it, so they stop counting as spending. A label the user chose is kept.
+    if _table_exists(conn, 'Transaction_Record') and _table_exists(conn, 'Category'):
+        conn.execute(
+            "UPDATE Transaction_Record SET category_id = "
+            "  (SELECT category_id FROM Category WHERE category_name = ?) "
+            "WHERE transaction_type = 'DEBIT' "
+            "  AND COALESCE(category_source, '') != 'user' "
+            "  AND category_id = (SELECT category_id FROM Category "
+            "                     WHERE category_name = 'Transfers') "
+            "  AND (' ' || LOWER(description) || ' ' LIKE '% atm %' OR LOWER(description) LIKE 'atm%' "
+            "       OR LOWER(description) LIKE '%cash withdrawal%' "
+            "       OR LOWER(description) LIKE '%cash out%') "
+            "  AND EXISTS (SELECT 1 FROM Category WHERE category_name = ?)",
+            (CASH_WITHDRAWAL, CASH_WITHDRAWAL))
 
     # Give pre-migration rows a stable dedup key so re-uploads still work.
     if _table_exists(conn, 'Transaction_Record'):
@@ -148,11 +179,14 @@ def category_id_for(conn, name):
 
 
 def record_metric(conn, model_type, algorithm=None, f1_score=None, mae=None,
-                  mae_ratio=None, sample_count=None, notes=None, user_id=None):
+                  mae_ratio=None, sample_count=None, notes=None, user_id=None,
+                  per_category_mae_ratio=None):
     conn.execute(
         'INSERT INTO ModelMetrics (model_type, algorithm, f1_score, mae, mae_ratio, '
-        'sample_count, notes, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        (model_type, algorithm, f1_score, mae, mae_ratio, sample_count, notes, user_id),
+        'per_category_mae_ratio, sample_count, notes, user_id) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (model_type, algorithm, f1_score, mae, mae_ratio, per_category_mae_ratio,
+         sample_count, notes, user_id),
     )
 
 

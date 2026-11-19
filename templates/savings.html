@@ -91,8 +91,32 @@ goals in due-date order — the goal due soonest is funded first.</p>
         </p>
         {% endif %}
 
+        <details class="manual-items" style="margin-top:.65rem;">
+            <summary class="small">Edit target or date</summary>
+            <form method="POST" action="{{ url_for('edit_goal', goal_id=goal.goal_id) }}" style="margin-top:.5rem;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                <div class="field" style="margin-bottom:.5rem;">
+                    <label for="edit_name_{{ goal.goal_id }}">Goal name</label>
+                    <input type="text" id="edit_name_{{ goal.goal_id }}" name="goal_name"
+                           value="{{ goal.goal_name }}" required class="small">
+                </div>
+                <div class="field" style="margin-bottom:.5rem;">
+                    <label for="edit_amount_{{ goal.goal_id }}">Target amount ({{ currency }})</label>
+                    <input type="number" step="0.01" min="0.01" id="edit_amount_{{ goal.goal_id }}"
+                           name="target_amount" value="{{ '%.2f'|format(goal.target_amount) }}"
+                           required inputmode="decimal" class="small">
+                </div>
+                <div class="field" style="margin-bottom:.5rem;">
+                    <label for="edit_date_{{ goal.goal_id }}">Target date</label>
+                    <input type="date" id="edit_date_{{ goal.goal_id }}" name="target_date"
+                           value="{{ goal.target_date }}" required class="small">
+                </div>
+                <button type="submit" class="small">Save changes</button>
+            </form>
+        </details>
+
         <form method="POST" action="{{ url_for('delete_goal', goal_id=goal.goal_id) }}"
-              style="margin-top:.75rem;"
+              style="margin-top:.65rem;"
               onsubmit="return confirm('Remove the goal &quot;{{ goal.goal_name }}&quot;?');">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <button type="submit" class="secondary small">Remove</button>

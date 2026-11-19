@@ -29,6 +29,7 @@ MONTH_DEBITS_QUERY = (
     "FROM Transaction_Record t "
     "LEFT JOIN Category c ON t.category_id = c.category_id "
     "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' AND t.is_salary = 0 "
+    "AND " + database.spending_filter('t') + " "
     "AND strftime('%Y-%m', t.transaction_date) = ?"
 )
 

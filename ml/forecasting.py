@@ -43,6 +43,7 @@ MONTHLY_SPEND_QUERY = (
     "FROM Transaction_Record t "
     "JOIN Category c ON t.category_id = c.category_id "
     "WHERE t.transaction_type = 'DEBIT' AND t.is_salary = 0 AND t.user_id = ? "
+    "AND " + database.spending_filter('t') + " "
     "GROUP BY month, c.category_name "
     "ORDER BY month"
 )
@@ -420,6 +421,7 @@ def backtest(conn, user_id, today=None):
         algorithm='ARIMA / Linear Regression / mean / median / Croston, '
                   'selected per category by rolling-origin CV',
         mae=result['mae'], mae_ratio=result['mae_ratio'],
+        per_category_mae_ratio=result['per_category_mae_ratio'],
         sample_count=len(matrix),
         notes=f"Hold-out month {result['test_month']}; monthly-total MAE; "
               f"{len(result['per_category'])} categories evaluated; "

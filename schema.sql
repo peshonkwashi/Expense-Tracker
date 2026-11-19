@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS ModelMetrics (
     algorithm TEXT,                  -- MultinomialNB | RandomForest | ARIMA | Mean
     f1_score REAL,
     mae REAL,
-    mae_ratio REAL,
+    mae_ratio REAL,                  -- monthly-total error / actual monthly spend
+    per_category_mae_ratio REAL,     -- mean per-category error / mean category spend (NFR-03)
     sample_count INTEGER,
     notes TEXT,
     trained_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -115,5 +116,7 @@ INSERT OR IGNORE INTO Category (category_name, category_type) VALUES
 ('Shopping',      'DISCRETIONARY'),
 ('Personal Care', 'DISCRETIONARY'),
 ('Transfers',     'DISCRETIONARY'),
+-- Not spending: excluded from every spending total (database.spending_filter)
+('Cash Withdrawal', 'DISCRETIONARY'),
 ('Income',        'ESSENTIAL'),
 ('Uncategorised', 'DISCRETIONARY');

@@ -28,6 +28,7 @@ ACTUAL_SPEND_QUERY = (
     "FROM Transaction_Record t "
     "JOIN Category c ON t.category_id = c.category_id "
     "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' AND t.is_salary = 0 "
+    "AND " + database.spending_filter('t') + " "
     "AND strftime('%Y-%m', t.transaction_date) = ? "
     "GROUP BY c.category_name"
 )
@@ -35,6 +36,7 @@ ACTUAL_SPEND_QUERY = (
 MONTH_TOTALS_QUERY = (
     "SELECT transaction_type, SUM(amount) AS total "
     "FROM Transaction_Record WHERE user_id = ? "
+    "AND " + database.spending_filter() + " "
     "AND strftime('%Y-%m', transaction_date) = ? GROUP BY transaction_type"
 )
 
@@ -62,7 +64,8 @@ def savings_pool(conn, user_id):
     income = expenses = 0.0
     for row in conn.execute(
             "SELECT transaction_type, SUM(amount) AS total FROM Transaction_Record "
-            "WHERE user_id = ? GROUP BY transaction_type", (user_id,)):
+            "WHERE user_id = ? AND " + database.spending_filter() + " "
+            "GROUP BY transaction_type", (user_id,)):
         if row['transaction_type'] == 'CREDIT':
             income = float(row['total'] or 0)
         else:
@@ -127,6 +130,7 @@ def build_budget(conn, user, today=None, month_key=None):
     actual_expenditure = conn.execute(
         "SELECT SUM(amount) AS total FROM Transaction_Record "
         "WHERE user_id = ? AND transaction_type = 'DEBIT' "
+        "AND " + database.spending_filter() + " "
         "AND strftime('%Y-%m', transaction_date) = ?",
         (user_id, month_key)).fetchone()['total']
     true_spent_total = float(actual_expenditure) if actual_expenditure else 0.0

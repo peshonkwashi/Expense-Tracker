@@ -258,172 +258,35 @@ def _dashboard_context(conn, user):
             'budget': budget, 'nudges': nudges, 'suggestions': suggestions}
 
 
-# --- AI Assistant Mock -------------------------------------------------------
+# --- On-device assistant -----------------------------------------------------
 
 @app.route('/ask-assistant', methods=['POST'])
 @security.login_required
 def ask_assistant():
-    """Mock assistant. The answer is returned as an HTML fragment (for the
-    <strong> emphasis), so every user-controlled string interpolated into it —
-    category names (users can create their own) and savings-goal names — is
-    HTML-escaped first; otherwise a category named <img src=x onerror=...>
-    would run script in the dashboard (stored XSS)."""
+    """On-device assistant (services/assistant.py): parses the question and
+    answers from the user's own data, with no network access (NFR-05).
+
+    The answer is an HTML fragment (for <strong> emphasis); every
+    user-controlled string in it (category, goal, merchant names) is escaped
+    by the assistant. The previous question's slots are kept in the session so
+    follow-ups like "and last month?" work.
+    """
     from flask import jsonify
-    from datetime import date
-    from markupsafe import escape
+    from services import assistant
     _demo_only()
+    payload = request.get_json(silent=True) or {}
+    question = str(payload.get('question') or '')[:300]
     conn = database.get_db_connection()
     try:
         user = database.get_user(conn)
-
-        payload = request.get_json(silent=True) or {}
-        question = payload.get('question', '').lower()
-        month_str = date.today().strftime('%Y-%m')
-        
-        # 1. Fetch all dynamic categories
-        categories = conn.execute("SELECT category_name FROM Category").fetchall()
-        category_names = [c['category_name'].lower() for c in categories]
-        
-        matched_cat = None
-        for c in category_names:
-            if c in question:
-                matched_cat = c
-                break
-        # Display form of the matched category, escaped for the HTML answer.
-        cat_label = escape(matched_cat.title()) if matched_cat else ''
-        
-        # 2. Logic Tree
-        if 'budget' in question or 'limit' in question or 'allocate' in question:
-            learning = behavioural.learning_status(conn, user)
-
-            if not learning['complete']:
-                response_text = "I can't calculate budget limits yet because you are still in the learning phase!"
-            else:
-                budget = recommendation.build_budget(conn, user)
-                if matched_cat:
-                    cat_budget = next((row for row in budget['rows'] if row['category'].lower() == matched_cat), None)
-                    if cat_budget:
-                        response_text = f"Your recommended budget for <strong>{escape(cat_budget['category'])}</strong> is <strong>{cat_budget['recommended']:,.2f}</strong>. You have spent <strong>{cat_budget['spent']:,.2f}</strong> so far."
-                    else:
-                        response_text = f"You don't have a specific budget allocation for {cat_label}."
-                else:
-                    response_text = f"Your total recommended spending budget this month is <strong>{budget['allocated_total']:,.2f}</strong>, and your savings target is <strong>{budget['recommended_savings']:,.2f}</strong>."
-
-        elif ('forecast' in question or 'predict' in question
-              or 'next month' in question or 'expect' in question):
-            forecasts = forecasting.generate_forecasts(conn, user['user_id'])
-            if not forecasts:
-                response_text = ("I need a few complete months of history before I can "
-                                 "forecast your spending — keep importing and I'll start "
-                                 "predicting soon.")
-            elif matched_cat:
-                cat_fc = next((f for name, f in forecasts.items()
-                               if name.lower() == matched_cat), None)
-                if cat_fc:
-                    response_text = (f"I forecast you'll spend about "
-                                     f"<strong>{cat_fc['amount']:,.2f}</strong> on "
-                                     f"<strong>{cat_label}</strong> next month "
-                                     f"({cat_fc['method']}).")
-                else:
-                    response_text = (f"I don't have enough history to forecast "
-                                     f"{cat_label} yet.")
-            else:
-                total_fc = sum(f['amount'] for f in forecasts.values())
-                response_text = (f"Based on your spending history, I forecast about "
-                                 f"<strong>{total_fc:,.2f}</strong> of spending across all "
-                                 f"categories next month.")
-
-        elif 'goal' in question or 'saving' in question:
-            goals = recommendation.goal_requirements(conn, user['user_id'])
-            if not goals:
-                response_text = ("You haven't set any savings goals yet. Add one on the "
-                                 "Savings Goals page and I'll track your progress here.")
-            else:
-                parts = [
-                    (f"<strong>{escape(g['goal_name'])}</strong> is {g['progress']:.0f}% funded"
-                     f" ({g['monthly_required']:,.2f}/month still needed"
-                     f"{' — overdue' if g['overdue'] else ''})")
-                    for g in goals[:3]
-                ]
-                response_text = ("Here is where your savings goals stand: "
-                                 + "; ".join(parts) + ".")
-
-        elif 'subscription' in question or 'recurring' in question:
-            row = conn.execute(
-                "SELECT COUNT(*) as n, COALESCE(SUM(amount), 0) as total "
-                "FROM Transaction_Record WHERE user_id = ? AND is_subscription = 1 "
-                "AND transaction_type = 'DEBIT' "
-                "AND strftime('%Y-%m', transaction_date) = ?",
-                (user['user_id'], month_str)
-            ).fetchone()
-            if not row['n']:
-                response_text = ("I haven't detected any recurring subscriptions yet — "
-                                 "they show up once a charge repeats at a steady amount "
-                                 "each month.")
-            else:
-                monthly = float(row['total'])
-                response_text = (f"You have <strong>{row['n']}</strong> recurring "
-                                 f"subscription(s) costing <strong>{monthly:,.2f}</strong> "
-                                 f"this month, about <strong>{monthly * 12:,.2f}</strong> a "
-                                 f"year. Cancelling one you no longer use is the easiest "
-                                 f"saving available to you.")
-
-        elif matched_cat:
-            row = conn.execute(
-                "SELECT SUM(t.amount) as total FROM Transaction_Record t "
-                "JOIN Category c ON t.category_id = c.category_id "
-                "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' "
-                "AND LOWER(c.category_name) = ? "
-                "AND strftime('%Y-%m', t.transaction_date) = ?",
-                (user['user_id'], matched_cat, month_str)
-            ).fetchone()
-            total = row['total'] or 0.0
-            response_text = f"You have spent <strong>{total:,.2f}</strong> on <strong>{cat_label}</strong> this month."
-            
-        elif 'total' in question or 'all' in question or ('how much' in question and 'spent' in question):
-            row = conn.execute(
-                "SELECT SUM(amount) as total FROM Transaction_Record "
-                "WHERE user_id = ? AND transaction_type = 'DEBIT' AND strftime('%Y-%m', transaction_date) = ?",
-                (user['user_id'], month_str)
-            ).fetchone()
-            total = row['total'] or 0.0
-            response_text = f"Your total spending across all categories this month is <strong>{total:,.2f}</strong>."
-            
-        elif 'food' in question or 'groceries' in question or 'eat' in question:
-            row = conn.execute(
-                "SELECT SUM(t.amount) as total FROM Transaction_Record t "
-                "JOIN Category c ON t.category_id = c.category_id "
-                "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' "
-                "AND c.category_name IN ('Groceries', 'Dining Out') "
-                "AND strftime('%Y-%m', t.transaction_date) = ?",
-                (user['user_id'], month_str)
-            ).fetchone()
-            total = row['total'] or 0.0
-            response_text = f"You have spent <strong>{total:,.2f}</strong> on food (Groceries and Dining Out) so far this month."
-            
-        elif 'afford' in question:
-            discretionary_spend = conn.execute(
-                "SELECT SUM(t.amount) as total FROM Transaction_Record t "
-                "JOIN Category c ON t.category_id = c.category_id "
-                "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' AND c.category_type = 'DISCRETIONARY' "
-                "AND strftime('%Y-%m', t.transaction_date) = ?",
-                (user['user_id'], month_str)
-            ).fetchone()['total'] or 0.0
-            
-            if discretionary_spend > (user['salary_amount'] * 0.2):
-                response_text = f"You've already spent <strong>{discretionary_spend:,.2f}</strong> on discretionary items this month. You might want to hold off!"
-            else:
-                response_text = f"You've only spent <strong>{discretionary_spend:,.2f}</strong> on discretionary items this month. If it's important, you can probably afford it!"
-        else:
-            response_text = ("I couldn't quite catch that. Try asking about your "
-                             "'budget', your 'total' spending, next month's 'forecast', "
-                             "your savings 'goals', your 'subscriptions', whether you can "
-                             "'afford' something, or a specific category like 'transport'.")
-            
+        reply = assistant.answer(conn, user, question,
+                                 context=session.get('assistant_ctx'))
     finally:
         conn.close()
-        
-    return jsonify({'answer': response_text})
+    if reply.context:
+        session['assistant_ctx'] = reply.context
+    return jsonify({'answer': reply.answer, 'suggestions': reply.suggestions})
+
 
 @app.route('/')
 @security.login_required
@@ -468,6 +331,7 @@ def export_transactions():
         
         selected_category = request.args.get('category', '')
         selected_month = request.args.get('month', '')
+        search_query = (request.args.get('q') or '').strip()
         
         query = (
             "SELECT t.transaction_date, t.description, t.amount, t.transaction_type, "
@@ -484,6 +348,9 @@ def export_transactions():
         if selected_month:
             query += " AND strftime('%Y-%m', t.transaction_date) = ?"
             params.append(selected_month)
+        if search_query:
+            query += " AND LOWER(t.description) LIKE ? ESCAPE '!'"
+            params.append(f'%{_like_escape(search_query.lower())}%')
             
         query += ' ORDER BY t.transaction_date DESC, t.transaction_id DESC'
         
@@ -621,7 +488,7 @@ def sync_momo():
             ("MoMo Pay - Shoprite",      'Groceries',       50,  600),
             ("MoMo Pay - Pharmacy",      'Healthcare',      30,  300),
             ("Send Money to Family",     'Transfers',      100, 1500),
-            ("Cash Out at MoMo Agent",   'Transfers',      200, 2000),
+            ("Cash Out at MoMo Agent",   'Cash Withdrawal', 200, 2000),
             ("MoMo Withdrawal Fee",      'Transfers',        5,   40),
         ]
         category_ids = {name: database.category_id_for(conn, cat)
@@ -670,6 +537,7 @@ def transactions():
 
         selected_category = request.args.get('category', '')
         selected_month = request.args.get('month', '')
+        search_query = (request.args.get('q') or '').strip()
         query = (
             "SELECT t.*, c.category_name, c.category_type "
             "FROM Transaction_Record t "
@@ -683,6 +551,9 @@ def transactions():
         if selected_month:
             query += " AND strftime('%Y-%m', t.transaction_date) = ?"
             params.append(selected_month)
+        if search_query:
+            query += " AND LOWER(t.description) LIKE ? ESCAPE '!'"
+            params.append(f'%{_like_escape(search_query.lower())}%')
             
         # Get total count for pagination
         count_query = query.replace('SELECT t.*, c.category_name, c.category_type', 'SELECT COUNT(*)')
@@ -722,6 +593,7 @@ def transactions():
                                categories=categories, months=months,
                                selected_category=selected_category,
                                selected_month=selected_month,
+                               search_query=search_query,
                                metric=metric, target_f1=config.TARGET_F1,
                                items_by_txn=items_by_txn,
                                page=page, total_pages=total_pages)
@@ -791,6 +663,103 @@ def _handle_upload(conn, user):
     elif not training['trained']:
         flash(f"Categorisation model not retrained: {training['reason']} "
               f"Keyword rules are labelling transactions in the meantime.", 'info')
+
+
+def _like_escape(text):
+    """Make % and _ in a search term match literally (LIKE ... ESCAPE '!')."""
+    return text.replace('!', '!!').replace('%', '!%').replace('_', '!_')
+
+
+@app.route('/transactions/add', methods=('POST',))
+@security.login_required
+def add_transaction():
+    """Log a single cash or manual transaction directly from the UI / mobile PWA."""
+    import hashlib
+    description = ' '.join((request.form.get('description') or '').split())[:120]
+    raw_date = (request.form.get('transaction_date') or date.today().isoformat()).strip()
+    parsed_date = ingestion.parse_date(raw_date)
+    amount = ingestion._parse_amount(request.form.get('amount'))
+    txn_type = (request.form.get('transaction_type') or 'DEBIT').strip().upper()
+    chosen_category = (request.form.get('category_name') or '').strip()
+
+    errors = []
+    if not description:
+        errors.append('Enter a description or merchant name.')
+    if parsed_date is None:
+        errors.append('Enter a valid transaction date.')
+    else:
+        date_err = ingestion.date_out_of_range(parsed_date)
+        if date_err:
+            errors.append(f'Date {date_err}.')
+    if amount is None or amount <= 0:
+        errors.append('Amount must be greater than zero.')
+    elif amount > config.MAX_TRANSACTION_AMOUNT:
+        errors.append(f'Amount exceeds the maximum of '
+                      f'{config.MAX_TRANSACTION_AMOUNT:,.0f} {config.CURRENCY}.')
+    if txn_type not in ('DEBIT', 'CREDIT'):
+        errors.append('Transaction type must be Debit or Credit.')
+
+    if errors:
+        for msg in errors:
+            flash(msg, 'error')
+        return redirect(url_for('transactions'))
+
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        date_iso = parsed_date.isoformat()
+        amount = round(float(amount), 2)
+
+        cat_row = None
+        if chosen_category:
+            cat_row = conn.execute(
+                'SELECT category_id, category_name FROM Category WHERE category_name = ?',
+                (chosen_category,)).fetchone()
+
+        if cat_row:
+            category_id = cat_row['category_id']
+            assigned_name = cat_row['category_name']
+            source = 'user'
+            confidence = 1.0
+        elif txn_type == 'DEBIT':
+            assigned_name, confidence, source = categorization.classify(
+                description, amount=amount, transaction_date=date_iso)
+            category_id = database.category_id_for(conn, assigned_name)
+        else:
+            # Same default as a statement import: money in is Income.
+            assigned_name = 'Income'
+            category_id = database.category_id_for(conn, assigned_name)
+            source = 'default'
+            confidence = None
+
+        # Every manual entry is unique (two identical bus fares on one day are
+        # two fares), and the 'manual-' prefix marks where the row came from.
+        nonce = f"{datetime.now().isoformat()}|{description}|{amount}|{os.urandom(4).hex()}"
+        import_hash = 'manual-' + hashlib.sha256(nonce.encode('utf-8')).hexdigest()[:40]
+
+        conn.execute(
+            'INSERT INTO Transaction_Record (transaction_date, description, amount, '
+            'transaction_type, is_salary, is_subscription, category_id, '
+            'category_source, category_confidence, import_hash, user_id) '
+            'VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)',
+            (date_iso, description, amount, txn_type, category_id,
+             source, confidence, import_hash, user['user_id']))
+
+        if txn_type == 'CREDIT':
+            ingestion.detect_salary(conn, user['user_id'])
+        conn.commit()
+
+        # No retrain here: it takes a few seconds, too slow when logging several
+        # cash purchases on a phone. A category chosen by hand is stored as a
+        # user label, so the next retrain (on import, correction or from
+        # Settings) learns from it.
+        forecasting.reset_forecast_cache()
+
+        flash(f'Added {txn_type.lower()} "{description}" '
+              f'({amount:,.2f} {config.CURRENCY}) under {assigned_name}.', 'success')
+        return redirect(url_for('transactions'))
+    finally:
+        conn.close()
 
 
 @app.route('/transactions/<int:transaction_id>/category', methods=('POST',))
@@ -1020,6 +989,40 @@ def budget():
 
 # --- Savings ---------------------------------------------------------------
 
+def _goal_form(form):
+    """Validate a savings-goal form: (name, amount, target date ISO, errors).
+
+    Shared by adding and editing, so both reject the same bad input; float()
+    accepts 'nan' and 'inf', which a bare `<= 0` check lets through.
+    """
+    errors = []
+    goal_name = ' '.join((form.get('goal_name') or '').split())
+    if not goal_name:
+        errors.append('Goal name is required.')
+    elif len(goal_name) > 80:
+        errors.append('Goal name must be 80 characters or fewer.')
+    try:
+        target_amount = round(float(form.get('target_amount') or 0), 2)
+        if not target_amount > 0:
+            errors.append('Target amount must be greater than zero.')
+        elif target_amount > config.MAX_TRANSACTION_AMOUNT:
+            errors.append(f'Target amount must be at most '
+                          f'{config.MAX_TRANSACTION_AMOUNT:,.0f} {config.CURRENCY}.')
+    except (ValueError, OverflowError):
+        target_amount = 0.0
+        errors.append('Target amount must be a number.')
+    target_date = (form.get('target_date') or '').strip()
+    try:
+        parsed = datetime.strptime(target_date, '%Y-%m-%d').date()
+        if parsed <= date.today():
+            errors.append('Target date must be in the future.')
+        elif parsed.year > date.today().year + 100:
+            errors.append('Target date is too far in the future.')
+    except ValueError:
+        errors.append('Target date is invalid.')
+    return goal_name, target_amount, target_date, errors
+
+
 @app.route('/savings', methods=('GET', 'POST'))
 @security.login_required
 def savings():
@@ -1028,25 +1031,7 @@ def savings():
         user = database.get_user(conn)
 
         if request.method == 'POST':
-            errors = []
-            goal_name = (request.form.get('goal_name') or '').strip()
-            if not goal_name:
-                errors.append('Goal name is required.')
-            try:
-                target_amount = float(request.form.get('target_amount') or 0)
-                if target_amount <= 0:
-                    errors.append('Target amount must be greater than zero.')
-            except ValueError:
-                target_amount = 0
-                errors.append('Target amount must be a number.')
-
-            target_date = request.form.get('target_date') or ''
-            try:
-                parsed = datetime.strptime(target_date, '%Y-%m-%d').date()
-                if parsed <= date.today():
-                    errors.append('Target date must be in the future.')
-            except ValueError:
-                errors.append('Target date is invalid.')
+            goal_name, target_amount, target_date, errors = _goal_form(request.form)
 
             if errors:
                 for message in errors:
@@ -1066,6 +1051,37 @@ def savings():
         position = recommendation.savings_position(conn, user, budget_view)
         return render_template('savings.html', user=user, savings=position,
                                learning=learning, budget=budget_view)
+    finally:
+        conn.close()
+
+
+@app.route('/savings/<int:goal_id>/edit', methods=('POST',))
+@security.login_required
+def edit_goal(goal_id):
+    """Edit an existing savings goal's name, target amount or target date."""
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        goal = conn.execute(
+            'SELECT * FROM SavingsGoal WHERE goal_id = ? AND user_id = ?',
+            (goal_id, user['user_id'])).fetchone()
+        if not goal:
+            abort(404)
+
+        goal_name, target_amount, target_date, errors = _goal_form(request.form)
+
+        if errors:
+            for message in errors:
+                flash(message, 'error')
+            return redirect(url_for('savings'))
+
+        conn.execute(
+            'UPDATE SavingsGoal SET goal_name = ?, target_amount = ?, target_date = ? '
+            'WHERE goal_id = ? AND user_id = ?',
+            (goal_name, target_amount, target_date, goal_id, user['user_id']))
+        conn.commit()
+        flash(f'Savings goal "{goal_name}" updated.', 'success')
+        return redirect(url_for('savings'))
     finally:
         conn.close()
 
@@ -1423,6 +1439,24 @@ def auto_fetch_receipts():
 
 # --- Settings --------------------------------------------------------------
 
+def _extract_per_category_mae_ratio(metric):
+    """The per-category forecast error ratio (NFR-03) of a FORECASTING metric.
+
+    Read from its own column; rows recorded before that column existed carry
+    it only in the notes text, so those fall back to parsing the notes.
+    """
+    if not metric:
+        return None
+    if 'per_category_mae_ratio' in metric.keys() and             metric['per_category_mae_ratio'] is not None:
+        return float(metric['per_category_mae_ratio'])
+    import re
+    match = re.search(r'per-category MAE ratio ([0-9.]+)', str(metric['notes'] or ''))
+    try:
+        return float(match.group(1)) if match else None
+    except ValueError:
+        return None
+
+
 @app.route('/settings')
 @security.login_required
 def settings():
@@ -1430,10 +1464,12 @@ def settings():
     conn = get_db_connection()
     try:
         user = database.get_user(conn)
+        f_metric = database.latest_metric(conn, 'FORECASTING')
         return render_template(
             'settings.html', user=user,
             categorisation=database.latest_metric(conn, 'CATEGORISATION'),
-            forecasting_metric=database.latest_metric(conn, 'FORECASTING'),
+            forecasting_metric=f_metric,
+            per_category_mae_ratio=_extract_per_category_mae_ratio(f_metric),
             target_f1=config.TARGET_F1, max_mae_ratio=config.MAX_MAE_RATIO,
             db_path=config.DATABASE_PATH, ocr_status=ocr_status(),
             imap_email=(database.get_setting(conn, IMAP_EMAIL_SETTING)
@@ -1666,10 +1702,83 @@ def change_password():
 @app.route('/settings/export')
 @security.login_required
 def export_database():
-    """One-click local backup of the SQLite file (section 5.11)."""
-    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-    return send_file(config.DATABASE_PATH, as_attachment=True,
-                     download_name=f'expense_tracker-backup-{stamp}.db')
+    """One-click backup of the database as a .zip (section 5.11).
+
+    A .zip rather than a bare .db, because phones don't recognise .db files
+    (see services/backup.py).
+    """
+    from io import BytesIO
+    from services import backup
+    data, name = backup.backup_zip(config.DATABASE_PATH, backup.timestamp())
+    return send_file(BytesIO(data), mimetype='application/zip',
+                     as_attachment=True, download_name=name)
+
+
+@app.route('/settings/restore', methods=('POST',))
+@security.login_required
+def restore_database():
+    """Replace all data with an uploaded backup (.zip, or a .db from older
+    backups), after keeping a safety copy of the current data.
+
+    Needs the current password: a restore replaces everything, including the
+    password itself.
+    """
+    import tempfile
+    from services import backup
+
+    uploaded = request.files.get('backup_file')
+    if uploaded is None or not uploaded.filename:
+        flash('Choose the backup file to restore.', 'error')
+        return redirect(url_for('settings'))
+
+    conn = get_db_connection()
+    try:
+        client = request.remote_addr or 'local'
+        wait = security.login_lockout_remaining(client)
+        if wait:
+            flash(f'Too many incorrect attempts. Try again in {wait} seconds.', 'error')
+            return redirect(url_for('settings'))
+        if not security.verify_password(conn, request.form.get('current_password')):
+            security.record_failed_login(client)
+            flash('Enter your current password to restore a backup.', 'error')
+            return redirect(url_for('settings'))
+        security.reset_login_attempts(client)
+    finally:
+        conn.close()
+
+    stamp = backup.timestamp()
+    with tempfile.TemporaryDirectory() as work:
+        upload_path = os.path.join(work, 'upload')
+        uploaded.save(upload_path)
+        try:
+            db_file = backup.unpack(upload_path, work)
+            backup.validate(db_file)
+            safety = backup.restore(db_file, config.DATABASE_PATH, stamp)
+        except backup.BackupError as error:
+            flash(str(error), 'error')
+            return redirect(url_for('settings'))
+
+    # Bring an older backup up to the current schema, then rebuild everything
+    # derived from the old data.
+    init_db()
+    categorization.reset_model_cache()
+    forecasting.reset_forecast_cache()
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        _retrain_and_evaluate(conn, user['user_id'])
+        conn.commit()
+        security.start_session(conn)
+    finally:
+        conn.close()
+
+    message = ('Backup restored. From now on, sign in with the password that was '
+               'in use when this backup was made.')
+    if safety:
+        message += (' Your previous data was kept as '
+                    f'{os.path.basename(safety)} next to the database.')
+    flash(message, 'success')
+    return redirect(url_for('settings'))
 
 
 @app.route('/sw.js')

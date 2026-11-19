@@ -12,6 +12,7 @@ import calendar
 from datetime import date, datetime, timedelta
 
 import config
+import database
 
 FIRST_TXN_QUERY = (
     "SELECT MIN(transaction_date) AS first_date, MAX(transaction_date) AS last_date, "
@@ -22,7 +23,8 @@ CYCLE_SPEND_QUERY = (
     "SELECT t.transaction_date, t.amount, c.category_name, c.category_type "
     "FROM Transaction_Record t "
     "JOIN Category c ON t.category_id = c.category_id "
-    "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' AND t.is_salary = 0"
+    "WHERE t.user_id = ? AND t.transaction_type = 'DEBIT' AND t.is_salary = 0 "
+    "AND " + database.spending_filter('t')
 )
 
 
