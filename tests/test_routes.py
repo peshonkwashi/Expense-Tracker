@@ -797,6 +797,20 @@ class PWATests(RouteTestCase):
         self.assertIn(b'expense-tracker-shell', response.data)
         response.close()
 
+    def test_settings_shows_offline_mode_indicator(self):
+        # The on-device diagnostic for offline mode (added after the iOS offline
+        # fallback failed in a real-device session, defect D15).
+        self.complete_setup()
+        response = self.client.get('/settings')
+        self.assertEqual(response.status_code, 200)
+        for marker in (b'Offline mode', b'id="offline-status"',
+                       b'id="offline-status-detail"', b'id="offline-status-mode"'):
+            self.assertIn(marker, response.data)
+        script = self.client.get('/static/js/pwa.js')
+        # pwa.js is what fills the indicator in; it must target the same ids.
+        self.assertIn(b"getElementById('offline-status')", script.data)
+        script.close()
+
     def test_offline_fallback_page_renders_without_login(self):
         response = self.client.get('/offline')
         self.assertEqual(response.status_code, 200)

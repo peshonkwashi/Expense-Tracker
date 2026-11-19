@@ -112,6 +112,20 @@
 </div>
 
 <div class="card">
+    <h2>Offline mode</h2>
+    {# Filled in by static/js/pwa.js, which checks the service worker on this
+       device and explains in plain words why offline mode is or isn't ready. #}
+    <table class="kv" style="font-size:.9rem;">
+        <tr><td>Status</td>
+            <td class="num"><span id="offline-status" class="badge">Checking…</span></td></tr>
+        <tr><td>Opened as</td><td class="num" id="offline-status-mode">—</td></tr>
+    </table>
+    <p class="muted" id="offline-status-detail" style="margin-top:.6rem;" aria-live="polite">
+        Checking whether this device can show the offline notice when the server
+        cannot be reached. If this message does not change, reload the page.</p>
+</div>
+
+<div class="card">
     <h2>Your data</h2>
     <p>All of your data lives in one file on this computer:</p>
     <p class="muted" style="word-break:break-all;"><code>{{ db_path }}</code></p>
