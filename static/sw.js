@@ -13,7 +13,7 @@
  */
 'use strict';
 
-var CACHE_NAME = 'expense-tracker-shell-v4';
+var CACHE_NAME = 'expense-tracker-shell-v5';
 var OFFLINE_URL = '/offline';
 
 var PRECACHE_ASSETS = [

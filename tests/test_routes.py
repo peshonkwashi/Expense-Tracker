@@ -273,6 +273,150 @@ class AuthenticationTests(RouteTestCase):
         self.assertIsNotNone(stored)
         self.assertNotIn(PASSWORD, stored)
 
+    def test_reset_password_succeeds_with_matching_profile_details(self):
+        self.complete_setup()
+        self.client.post('/logout')
+        login_page = self.client.get('/login').data
+        self.assertIn(b'Forgot your password?', login_page)
+
+        new_password = 'new-strong-password-456'
+        response = self.client.post('/reset-password', data={
+            'full_name': '  test user ',
+            'salary_amount': str(int(SALARY)),
+            'salary_day': str(SALARY_DAY),
+            'password': new_password,
+            'password_confirm': new_password,
+        }, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Your password has been reset', response.data)
+
+        # Old password must no longer unlock the app.
+        old_attempt = self.client.post('/login', data={'password': PASSWORD},
+                                       follow_redirects=True)
+        self.assertIn(b'Incorrect password', old_attempt.data)
+
+        # New password signs in cleanly.
+        new_attempt = self.client.post('/login', data={'password': new_password},
+                                       follow_redirects=True)
+        self.assertIn(b'Hello', new_attempt.data)
+
+    def test_reset_password_rejects_wrong_profile_details(self):
+        self.complete_setup()
+        self.client.post('/logout')
+        response = self.client.post('/reset-password', data={
+            'full_name': 'Test User',
+            'salary_amount': '9999',
+            'salary_day': str(SALARY_DAY),
+            'password': 'new-strong-password-456',
+            'password_confirm': 'new-strong-password-456',
+        }, follow_redirects=True)
+        self.assertIn(b'do not match the account on this device', response.data)
+        # Original password still works.
+        ok = self.client.post('/login', data={'password': PASSWORD},
+                              follow_redirects=True)
+        self.assertIn(b'Hello', ok.data)
+
+    def test_change_password_from_settings_updates_password(self):
+        self.complete_setup()
+        # Wrong current password is rejected.
+        bad = self.client.post('/settings/password', data={
+            'current_password': 'wrong-current-password',
+            'new_password': 'updated-password-789',
+            'password_confirm': 'updated-password-789',
+        }, follow_redirects=True)
+        self.assertIn(b'Current password is incorrect', bad.data)
+
+        # Correct current password updates the hash.
+        good = self.client.post('/settings/password', data={
+            'current_password': PASSWORD,
+            'new_password': 'updated-password-789',
+            'password_confirm': 'updated-password-789',
+        }, follow_redirects=True)
+        self.assertIn(b'Your password has been updated', good.data)
+
+        self.client.post('/logout')
+        signed_in = self.client.post('/login',
+                                     data={'password': 'updated-password-789'},
+                                     follow_redirects=True)
+        self.assertIn(b'Hello', signed_in.data)
+
+    def test_reset_with_a_non_ascii_name_is_a_mismatch_not_a_crash(self):
+        # secrets.compare_digest raises TypeError on non-ASCII str.
+        self.complete_setup()
+        self.client.post('/logout')
+        response = self.client.post('/reset-password', data={
+            'full_name': 'Tést Üser', 'salary_amount': str(int(SALARY)),
+            'salary_day': str(SALARY_DAY), 'password': 'new-strong-password-456',
+            'password_confirm': 'new-strong-password-456'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'do not match the account on this device', response.data)
+
+    def test_changing_the_password_signs_out_other_devices_but_not_this_one(self):
+        self.complete_setup()
+        phone = self.client.application.test_client()
+        phone.post('/login', data={'password': PASSWORD})
+        self.assertEqual(phone.get('/settings').status_code, 200)
+
+        self.client.post('/settings/password', data={
+            'current_password': PASSWORD, 'new_password': 'updated-password-789',
+            'password_confirm': 'updated-password-789'})
+
+        self.assertEqual(self.client.get('/settings').status_code, 200)
+        signed_out = phone.get('/settings', follow_redirects=True)
+        self.assertIn(b'please sign in again', signed_out.data)
+        self.assertIn(b'Welcome back', signed_out.data)
+
+    def test_reset_signs_out_every_existing_session(self):
+        self.complete_setup()
+        phone = self.client.application.test_client()
+        phone.post('/login', data={'password': PASSWORD})
+        self.client.post('/logout')
+        self.client.post('/reset-password', data={
+            'full_name': 'Test User', 'salary_amount': str(int(SALARY)),
+            'salary_day': str(SALARY_DAY), 'password': 'new-strong-password-456',
+            'password_confirm': 'new-strong-password-456'})
+        self.assertEqual(phone.get('/settings').status_code, 302)
+
+    def test_wrong_current_password_counts_towards_the_lockout(self):
+        self.complete_setup()
+        for _ in range(config.MAX_LOGIN_ATTEMPTS):
+            self.client.post('/settings/password', data={
+                'current_password': 'not-it', 'new_password': 'updated-password-789',
+                'password_confirm': 'updated-password-789'})
+        locked = self.client.post('/settings/password', data={
+            'current_password': PASSWORD, 'new_password': 'updated-password-789',
+            'password_confirm': 'updated-password-789'}, follow_redirects=True)
+        self.assertIn(b'Too many incorrect attempts', locked.data)
+        self.client.post('/logout')
+        still_old = self.client.post('/login', data={'password': PASSWORD})
+        self.assertEqual(still_old.status_code, 429)  # locked, and unchanged
+
+    def test_new_password_must_differ_from_the_current_one(self):
+        self.complete_setup()
+        response = self.client.post('/settings/password', data={
+            'current_password': PASSWORD, 'new_password': PASSWORD,
+            'password_confirm': PASSWORD}, follow_redirects=True)
+        self.assertIn(b'same as the current one', response.data)
+
+    def test_password_forms_include_show_password_checkbox(self):
+        # Fresh install: /setup has the checkbox.
+        setup_html = self.client.get('/setup').data
+        self.assertIn(b'data-toggle-passwords', setup_html)
+        self.assertIn(b'Show password', setup_html)
+
+        self.complete_setup()
+        # Signed-in: /settings Change password card has the checkbox.
+        settings_html = self.client.get('/settings').data
+        self.assertIn(b'data-toggle-passwords', settings_html)
+
+        # Signed-out: /login and /reset-password both have the checkbox.
+        self.client.post('/logout')
+        for path in ('/login', '/reset-password'):
+            with self.subTest(path=path):
+                html = self.client.get(path).data
+                self.assertIn(b'data-toggle-passwords', html)
+                self.assertIn(b'Show password', html)
+
 
 class PageRenderTests(RouteTestCase):
     def setUp(self):
@@ -302,6 +446,146 @@ class PageRenderTests(RouteTestCase):
             'file': (io.BytesIO(b'Foo,Bar\n1,2\n'), 'statement.csv'),
         }, content_type='multipart/form-data', follow_redirects=True)
         self.assertIn(b'Missing required column', response.data)
+
+
+class EmailReceiptTransactionTests(RouteTestCase):
+    """Receipts with no matching transaction become transactions, and a later
+    statement upload merges with them instead of duplicating them."""
+
+    def setUp(self):
+        super().setUp()
+        self.complete_setup()
+        from datetime import date, timedelta
+        self.receipt_day = date.today() - timedelta(days=5)
+
+    def _scan(self, receipts):
+        from unittest import mock
+        from services import email_receipts
+        mailbox = mock.Mock()
+        mailbox.search.return_value = ('OK', [b''])  # pass 1 finds nothing
+        with mock.patch.dict(os.environ, {'IMAP_EMAIL': 'me@example.com',
+                                          'IMAP_PASSWORD': 'secret'}), \
+                mock.patch('services.imap_fetcher.connect_imap',
+                           return_value=mailbox), \
+                mock.patch('services.email_receipts.read_new_receipts',
+                           return_value=email_receipts.SweepResult(receipts=receipts)):
+            return self.client.post('/auto-fetch-receipts', follow_redirects=True)
+
+    def _uber_receipt(self, key='<trip-1@uber.com>'):
+        from services import email_receipts, ocr
+        return email_receipts.NewReceipt(
+            key, self.receipt_day, 'Uber', 50.0,
+            ocr.ReceiptScan(items=[{'name': 'Trip fare', 'price': 45.0, 'quantity': 1},
+                                   {'name': 'Booking fee', 'price': 5.0, 'quantity': 1}],
+                            total=50.0))
+
+    def _rows(self):
+        import database
+        conn = database.get_db_connection()
+        rows = conn.execute(
+            'SELECT t.transaction_id, t.transaction_date, t.description, t.amount, '
+            '  c.category_name, (SELECT COUNT(*) FROM Receipt_Item r '
+            '                    WHERE r.transaction_id = t.transaction_id) AS items '
+            'FROM Transaction_Record t LEFT JOIN Category c '
+            '  ON t.category_id = c.category_id').fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def _upload_csv(self, text):
+        return self.client.post('/transactions', data={
+            'file': (io.BytesIO(text.encode()), 'statement.csv'),
+        }, content_type='multipart/form-data', follow_redirects=True)
+
+    def test_scan_adds_a_purchase_with_no_transactions_yet(self):
+        response = self._scan([self._uber_receipt()])
+        self.assertIn(b'Added 1 purchase(s) from your email receipts', response.data)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['description'], 'Uber')
+        self.assertEqual(rows[0]['amount'], 50.0)
+        self.assertEqual(rows[0]['items'], 2)
+        self.assertEqual(rows[0]['transaction_date'], self.receipt_day.isoformat())
+        self.assertIsNotNone(rows[0]['category_name'])
+
+    def test_rescanning_the_same_email_adds_nothing(self):
+        self._scan([self._uber_receipt()])
+        response = self._scan([self._uber_receipt()])
+        self.assertEqual(len(self._rows()), 1)
+        self.assertIn(b'No new receipt emails', response.data)
+
+    def test_receipt_matching_a_bank_transaction_only_itemises_it(self):
+        from datetime import timedelta
+        bank_day = self.receipt_day + timedelta(days=1)
+        self._upload_csv(f'Date,Description,Amount\n{bank_day},UBER *TRIP,-50.00\n')
+        self._scan([self._uber_receipt()])
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['description'], 'UBER *TRIP')
+        self.assertEqual(rows[0]['items'], 2)
+
+    def test_statement_upload_merges_with_an_email_added_purchase(self):
+        from datetime import timedelta
+        self._scan([self._uber_receipt()])
+        bank_day = self.receipt_day + timedelta(days=2)
+        statement = f'Date,Description,Amount\n{bank_day},UBER *TRIP HELP.UBER.COM,-50.00\n'
+
+        response = self._upload_csv(statement)
+        self.assertIn(b'1 matched purchase(s) already added from your email', response.data)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)  # merged, not duplicated
+        self.assertEqual(rows[0]['description'], 'UBER *TRIP HELP.UBER.COM')
+        self.assertEqual(rows[0]['transaction_date'], bank_day.isoformat())
+        self.assertEqual(rows[0]['items'], 2)  # the receipt items survive
+
+        again = self._upload_csv(statement)  # re-uploading stays a duplicate
+        self.assertIn(b'1 duplicate(s) skipped', again.data)
+        self.assertEqual(len(self._rows()), 1)
+
+    def test_different_amount_is_not_merged(self):
+        from datetime import timedelta
+        self._scan([self._uber_receipt()])
+        bank_day = self.receipt_day + timedelta(days=1)
+        self._upload_csv(f'Date,Description,Amount\n{bank_day},UBER *TRIP,-55.00\n')
+        self.assertEqual(len(self._rows()), 2)
+
+    def _dollar_receipt(self):
+        from services import email_receipts, ocr
+        # $50 converted at K25 per dollar: an estimate of K1,250.
+        return email_receipts.NewReceipt(
+            '<order-9@amazon.com>', self.receipt_day, 'Amazon', 1250.0,
+            ocr.ReceiptScan(items=[{'name': 'Book', 'price': 1250.0, 'quantity': 1}],
+                            total=1250.0),
+            currency='USD', original=50.0, rate=25.0)
+
+    def test_converted_purchase_merges_with_the_bank_amount_within_tolerance(self):
+        from datetime import timedelta
+        self._scan([self._dollar_receipt()])
+        self.assertEqual(self._rows()[0]['description'], 'Amazon (USD 50.00 at 25.00)')
+
+        bank_day = self.receipt_day + timedelta(days=2)
+        # The bank's own rate plus a fee: K1,290, 3.2% above the estimate.
+        response = self._upload_csv(
+            f'Date,Description,Amount\n{bank_day},AMAZON MKTPLACE US,-1290.00\n')
+        self.assertIn(b'1 matched purchase(s) already added', response.data)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['description'], rows[0]['amount']),
+                         ('AMAZON MKTPLACE US', 1290.0))  # the bank's figure wins
+        self.assertEqual(rows[0]['items'], 1)
+
+    def test_converted_purchase_far_from_the_bank_amount_is_not_merged(self):
+        from datetime import timedelta
+        self._scan([self._dollar_receipt()])
+        bank_day = self.receipt_day + timedelta(days=1)
+        self._upload_csv(f'Date,Description,Amount\n{bank_day},AMAZON,-1400.00\n')
+        self.assertEqual(len(self._rows()), 2)  # 12% apart: a different purchase
+
+    def test_kwacha_purchase_still_needs_an_exact_amount(self):
+        from datetime import timedelta
+        self._scan([self._uber_receipt()])
+        bank_day = self.receipt_day + timedelta(days=1)
+        self._upload_csv(f'Date,Description,Amount\n{bank_day},UBER *TRIP,-51.00\n')
+        self.assertEqual(len(self._rows()), 2)  # 2% apart, but not converted
 
 
 class FullFlowTests(RouteTestCase):
@@ -527,27 +811,27 @@ class NewFeatureTests(RouteTestCase):
         # The fetcher searches only merchants that email receipts, itemises only
         # those whose attachment was found and read, and never invents items.
         from unittest import mock
-        from services import ocr
+        from services import email_receipts, ocr
 
         found = []
 
-        def fake_fetch(mail, keyword, days_back=7):
-            if found:
-                return None  # only the first merchant has an email receipt
-            handle = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-            handle.close()
+        def fake_find(mail, keyword, on_date, amount, scan_file, **kwargs):
+            if found:  # only the first merchant has an email receipt
+                return email_receipts.EmailReceiptResult(email_receipts.NOT_FOUND)
             found.append(keyword)
-            return handle.name
+            return email_receipts.EmailReceiptResult(
+                email_receipts.MATCHED,
+                ocr.ReceiptScan(items=[{'name': 'Real Line', 'price': 12.5,
+                                        'quantity': 1}], total=12.5))
 
-        scanned = ocr.ReceiptScan(items=[
-            {'name': 'Real Line', 'price': 12.5, 'quantity': 1}], total=12.5)
         with mock.patch.dict(os.environ, {'IMAP_EMAIL': 'me@example.com',
                                           'IMAP_PASSWORD': 'secret'}), \
                 mock.patch('services.imap_fetcher.connect_imap',
                            return_value=mock.Mock()), \
-                mock.patch('services.imap_fetcher.fetch_receipt_attachment',
-                           side_effect=fake_fetch), \
-                mock.patch('services.ocr.scan_receipt', return_value=scanned):
+                mock.patch('services.email_receipts.find_receipt_for',
+                           side_effect=fake_find), \
+                mock.patch('services.email_receipts.read_new_receipts',
+                           return_value=email_receipts.SweepResult()):
             response = self.client.post('/auto-fetch-receipts', follow_redirects=True)
 
         self.assertIn(b'Itemised 1 emailed receipt', response.data)
@@ -560,6 +844,25 @@ class NewFeatureTests(RouteTestCase):
         conn.close()
         self.assertEqual([r['item_name'] for r in rows], ['Real Line'])
         self.assertTrue(ocr.emails_receipt(rows[0]['description']))
+
+    def test_auto_fetch_uses_the_form_credentials_and_never_stores_the_password(self):
+        from unittest import mock
+        import database
+        connect = mock.Mock(side_effect=OSError('offline'))
+        with mock.patch.dict(os.environ, {'IMAP_EMAIL': '', 'IMAP_PASSWORD': ''}), \
+                mock.patch('services.imap_fetcher.connect_imap', connect):
+            response = self.client.post('/auto-fetch-receipts', data={
+                'imap_email': 'me@example.com', 'imap_password': 'app-pass-123'},
+                follow_redirects=True)
+        connect.assert_called_once_with('me@example.com', 'app-pass-123')
+        self.assertIn(b'Could not reach your mail server', response.data)
+        conn = database.get_db_connection()
+        stored = [r['value'] for r in conn.execute('SELECT value FROM AppSetting')]
+        conn.close()
+        self.assertIn('me@example.com', stored)
+        self.assertFalse(any('app-pass-123' in v for v in stored))
+        # The remembered address pre-fills the form.
+        self.assertIn(b'value="me@example.com"', self.client.get('/settings').data)
 
     def _receipt_item_count(self):
         import database
@@ -715,7 +1018,7 @@ class NewFeatureTests(RouteTestCase):
         response = self.client.get('/settings')
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'<title>Settings</title>', response.data)
-        self.assertEqual(response.data.count(b'Email Receipt Auto-Fetcher'), 1)
+        self.assertEqual(response.data.count(b'<h2>Email receipts</h2>'), 1)
 
     def test_household_invite_creates_partner_and_settles(self):
         first = self.client.get('/household')
@@ -835,6 +1138,30 @@ class PWATests(RouteTestCase):
         self.assertIn(b'<svg', svg_res.data)
         svg_res.close()
 
+    def test_theme_toggle_and_system_default_controls_render(self):
+        # Every page loads the zero-flash theme script in <head>, with no
+        # separate theme button in the top navigation bar.
+        setup_html = self.client.get('/setup').data
+        self.assertIn(b'expense-tracker-theme', setup_html)
+        self.assertNotIn(b'id="theme-toggle-btn"', setup_html)
+
+        # The Settings Appearance card exposes System default, Light, and Dark.
+        self.complete_setup()
+        dashboard_html = self.client.get('/').data
+        self.assertNotIn(b'id="theme-toggle-btn"', dashboard_html)
+
+        settings_html = self.client.get('/settings').data
+        self.assertIn(b'<h2>Appearance</h2>', settings_html)
+        for mode in (b'data-theme-set="system"',
+                     b'data-theme-set="light"',
+                     b'data-theme-set="dark"'):
+            self.assertIn(mode, settings_html)
+
+        css_res = self.client.get('/static/css/style.css')
+        self.assertIn(b':root[data-theme="dark"]', css_res.data)
+        self.assertIn(b'prefers-color-scheme: dark', css_res.data)
+        css_res.close()
+
 
 class UATAndPerformanceTests(RouteTestCase):
     """Automated NFR-01 response-time check and UAT session preparation test."""
@@ -884,6 +1211,88 @@ class UATAndPerformanceTests(RouteTestCase):
             self.assertTrue(info['db_path'].endswith('uat_P01.db'))
         finally:
             shutil.rmtree(temp_root, ignore_errors=True)
+
+    def test_update_profile_changes_salary_and_pay_day(self):
+        self.complete_setup()
+        response = self.client.post('/settings/profile', data={
+            'full_name': 'Promoted User',
+            'salary_amount': '18500.00',
+            'salary_day': '28',
+            'current_password': PASSWORD,
+        }, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Income updated to 18,500.00', response.data)
+
+        dashboard = self.client.get('/').data
+        self.assertIn(b'Hello, Promoted', dashboard)
+        self.assertIn(b'18,500.00', dashboard)
+        self.assertIn(b'paid on day 28', dashboard)
+
+    def test_update_profile_rejects_invalid_values(self):
+        self.complete_setup()
+        bad = self.client.post('/settings/profile', data={
+            'full_name': '',
+            'salary_amount': '-500',
+            'salary_day': '40',
+        }, follow_redirects=True)
+        self.assertIn(b'Enter your name', bad.data)
+        self.assertIn(b'Salary amount must be greater than zero', bad.data)
+        self.assertIn(b'Pay day must be between 1 and 31', bad.data)
+
+    def _profile(self):
+        import database
+        conn = database.get_db_connection()
+        user = database.get_user(conn)
+        conn.close()
+        return user['full_name'], user['salary_amount'], user['salary_day']
+
+    def test_update_profile_needs_the_current_password(self):
+        # The profile is the password-reset key: changing it without the
+        # password would let anyone at an unlocked device take over the app.
+        self.complete_setup()
+        before = self._profile()
+        for password in ('', 'wrong-password'):
+            with self.subTest(password=password):
+                response = self.client.post('/settings/profile', data={
+                    'full_name': 'Intruder', 'salary_amount': '1.00',
+                    'salary_day': '1', 'current_password': password,
+                }, follow_redirects=True)
+                self.assertIn(b'Enter your current password', response.data)
+                self.assertEqual(self._profile(), before)
+
+    def test_update_profile_with_no_changes_is_a_no_op(self):
+        self.complete_setup()
+        response = self.client.post('/settings/profile', data={
+            'full_name': 'Test User', 'salary_amount': str(SALARY),
+            'salary_day': str(SALARY_DAY),
+        }, follow_redirects=True)
+        self.assertIn(b'Nothing to update', response.data)
+
+    def test_update_profile_rejects_an_implausibly_large_salary(self):
+        self.complete_setup()
+        response = self.client.post('/settings/profile', data={
+            'full_name': 'Test User', 'salary_amount': '1e15',
+            'salary_day': str(SALARY_DAY), 'current_password': PASSWORD,
+        }, follow_redirects=True)
+        self.assertIn(b'Salary amount must be at most', response.data)
+        self.assertNotIn(b'must be greater than zero', response.data)
+
+    def test_reset_uses_the_updated_profile_details(self):
+        self.complete_setup()
+        self.client.post('/settings/profile', data={
+            'full_name': 'Test User', 'salary_amount': '18500',
+            'salary_day': '28', 'current_password': PASSWORD})
+        self.client.post('/logout')
+        old = self.client.post('/reset-password', data={
+            'full_name': 'Test User', 'salary_amount': str(int(SALARY)),
+            'salary_day': str(SALARY_DAY), 'password': 'new-strong-password-456',
+            'password_confirm': 'new-strong-password-456'}, follow_redirects=True)
+        self.assertIn(b'do not match', old.data)
+        new = self.client.post('/reset-password', data={
+            'full_name': 'Test User', 'salary_amount': '18500', 'salary_day': '28',
+            'password': 'new-strong-password-456',
+            'password_confirm': 'new-strong-password-456'}, follow_redirects=True)
+        self.assertIn(b'Your password has been reset', new.data)
 
 
 if __name__ == '__main__':

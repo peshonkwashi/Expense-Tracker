@@ -116,8 +116,8 @@ correction.</p>
                 {% for txn in transactions %}
                 <tr>
                     <td data-label="Date">{{ txn['transaction_date'] }}</td>
-                    <td data-label="Description">
-                        {{ txn['description'] }}
+                    <td data-label="Description" class="cell-title">
+                        <span class="cell-heading">{{ txn['description'] }}</span>
                         {% if txn['is_subscription'] %}<span class="badge sub" title="Recurring charge">recurring</span>{% endif %}
                         {% if txn['is_salary'] %}<span class="badge essential">salary</span>{% endif %}
                     </td>
@@ -136,8 +136,8 @@ correction.</p>
                         {% else %}—{% endif %}
                         </span>
                     </td>
-                    <td data-label="Correct it" class="no-print">
-                        <div style="display: flex; gap: 5px; flex-direction: column;">
+                    <td data-label="Correct it" class="no-print cell-stack">
+                        <div class="correct-controls">
                             <form class="inline-form" method="POST"
                                   action="{{ url_for('recategorise', transaction_id=txn['transaction_id']) }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>

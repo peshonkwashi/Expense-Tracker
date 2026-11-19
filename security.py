@@ -24,6 +24,7 @@ import database
 
 PASSWORD_KEY = 'password_hash'
 NOTICE_KEY = 'data_notice_acknowledged'
+SESSION_EPOCH_KEY = 'session_epoch'
 MIN_PASSWORD_LENGTH = 8
 
 
@@ -60,8 +61,23 @@ def set_password(conn, password):
         return False, (f'Password must be at least {MIN_PASSWORD_LENGTH} '
                        'characters long.')
     database.set_setting(conn, PASSWORD_KEY, generate_password_hash(password))
+    # A new password starts a new session generation, so every device still
+    # signed in under the old password (the phone, a forgotten browser tab) is
+    # signed out on its next request. See login_required.
+    database.set_setting(conn, SESSION_EPOCH_KEY, secrets.token_hex(8))
     conn.commit()
     return True, None
+
+
+def _session_epoch(conn=None):
+    """The current session generation, or None before any password change."""
+    if conn is not None:
+        return database.get_setting(conn, SESSION_EPOCH_KEY)
+    own = database.get_db_connection()
+    try:
+        return database.get_setting(own, SESSION_EPOCH_KEY)
+    finally:
+        own.close()
 
 
 def verify_password(conn, password):
@@ -69,6 +85,31 @@ def verify_password(conn, password):
     if not stored:
         return False
     return check_password_hash(stored, password or '')
+
+
+def verify_profile_for_reset(conn, full_name, salary_amount, salary_day):
+    """Verify the local user's profile details (name, salary, pay day) for an
+    offline password reset. Since no email or external server exists (NFR-05),
+    matching all three profile attributes proves ownership of the local profile.
+    """
+    user = database.get_user(conn)
+    if not user:
+        return False
+    cleaned_name = ' '.join((full_name or '').casefold().split())
+    expected_name = ' '.join((user['full_name'] or '').casefold().split())
+    # compare_digest only accepts ASCII str, so a name such as "Mwila Chanda-Ng'ambi"
+    # typed with a curly apostrophe or an accent would raise TypeError; bytes work
+    # for any name.
+    if not cleaned_name or not secrets.compare_digest(
+            cleaned_name.encode('utf-8'), expected_name.encode('utf-8')):
+        return False
+    try:
+        salary = float(salary_amount)
+        day = int(salary_day)
+    except (TypeError, ValueError):
+        return False
+    return (abs(salary - float(user['salary_amount'])) < 0.01
+            and day == int(user['salary_day']))
 
 
 def safe_next(target):
@@ -140,9 +181,10 @@ def acknowledge_notice(conn):
     conn.commit()
 
 
-def start_session():
+def start_session(conn=None):
     session.clear()
     session['authenticated'] = True
+    session['epoch'] = _session_epoch(conn)
     touch_session()
 
 
@@ -176,6 +218,10 @@ def login_required(view):
             session.clear()
             flash(f'Signed out after {config.SESSION_TIMEOUT_MINUTES} minutes '
                   'of inactivity.', 'warning')
+            return redirect(url_for('login'))
+        if session.get('epoch') != _session_epoch():
+            session.clear()
+            flash('The password was changed, so please sign in again.', 'warning')
             return redirect(url_for('login'))
         touch_session()
         return view(*args, **kwargs)

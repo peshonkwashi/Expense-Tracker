@@ -228,6 +228,18 @@ def detect_salary(conn, user_id):
     pay_day = int(user['salary_day'])
     tolerance = salary_amount * config.SALARY_MATCH_TOLERANCE
 
+    # Preserve previously verified salary credits in earlier calendar months so
+    # a promotion or salary adjustment does not un-flag historical paychecks
+    # that matched the user's previous salary level.
+    previously_flagged = {
+        str(row['transaction_date'])[:7]: row['transaction_id']
+        for row in conn.execute(
+            "SELECT transaction_id, transaction_date FROM Transaction_Record "
+            "WHERE user_id = ? AND transaction_type = 'CREDIT' AND is_salary = 1 "
+            "ORDER BY transaction_date",
+            (user_id,))
+    }
+
     conn.execute(
         "UPDATE Transaction_Record SET is_salary = 0 "
         "WHERE user_id = ? AND transaction_type = 'CREDIT'", (user_id,))
@@ -251,12 +263,71 @@ def detect_salary(conn, user_id):
              row['transaction_id']))
 
     chosen = [min(rows)[2] for rows in by_month.values()]
+    for month, prev_txn_id in previously_flagged.items():
+        if month not in by_month:
+            chosen.append(prev_txn_id)
     if chosen:
         placeholders = ','.join('?' * len(chosen))
         conn.execute(
             f'UPDATE Transaction_Record SET is_salary = 1 '
             f'WHERE transaction_id IN ({placeholders})', chosen)
     return chosen
+
+
+EMAIL_RECEIPT_WINDOW_DAYS = 3
+
+
+def _merge_into_email_receipt(conn, user_id, on, description, amount, digest,
+                              category_name, confidence, source):
+    """Fold a bank row into a transaction first added from an emailed receipt.
+
+    The email scanner can add a purchase before the statement shows it. When
+    the statement arrives, the bank row (same amount, within 3 days) takes over
+    that transaction instead of becoming a duplicate: the bank's date and
+    description replace the email's, the receipt items stay attached, and a
+    category the user chose is kept. Returns True when a row was merged.
+
+    Never runs for a row already imported (a re-uploaded statement), so the
+    usual duplicate count is unaffected.
+    """
+    if conn.execute('SELECT 1 FROM Transaction_Record WHERE user_id = ? '
+                    'AND import_hash = ?', (user_id, digest)).fetchone():
+        return False
+    # A receipt converted from another currency ('email-fx-') holds an
+    # estimate, so it matches within fx.FX_TOLERANCE; the bank's amount then
+    # replaces the estimate. Same rule the email scan uses (services/fx.py).
+    from services import fx
+    target = conn.execute(
+        "SELECT transaction_id, category_source FROM Transaction_Record "
+        "WHERE user_id = ? AND import_hash LIKE 'email-%' "
+        "  AND transaction_type = 'DEBIT' "
+        "  AND ABS(amount - ?) <= CASE WHEN import_hash LIKE 'email-fx-%' "
+        "                              THEN ? ELSE ? END "
+        "  AND transaction_date BETWEEN ? AND ? "
+        "ORDER BY ABS(julianday(transaction_date) - julianday(?)), "
+        "  ABS(amount - ?), transaction_id "
+        "LIMIT 1",
+        (user_id, amount, fx.tolerance(amount, True), fx.EXACT_TOLERANCE,
+         (on - timedelta(days=EMAIL_RECEIPT_WINDOW_DAYS)).isoformat(),
+         (on + timedelta(days=EMAIL_RECEIPT_WINDOW_DAYS)).isoformat(),
+         on.isoformat(), amount)).fetchone()
+    if not target:
+        return False
+    if target['category_source'] == 'user':
+        conn.execute(
+            'UPDATE Transaction_Record SET transaction_date = ?, description = ?, '
+            'amount = ?, import_hash = ? WHERE transaction_id = ?',
+            (on.isoformat(), description, round(amount, 2), digest,
+             target['transaction_id']))
+    else:
+        conn.execute(
+            'UPDATE Transaction_Record SET transaction_date = ?, description = ?, '
+            'amount = ?, import_hash = ?, category_id = ?, category_source = ?, '
+            'category_confidence = ? WHERE transaction_id = ?',
+            (on.isoformat(), description, round(amount, 2), digest,
+             database.category_id_for(conn, category_name), source, confidence,
+             target['transaction_id']))
+    return True
 
 
 def import_statement(conn, user_id, filepath, today=None):
@@ -270,7 +341,8 @@ def import_statement(conn, user_id, filepath, today=None):
     today = today or date.today()
 
     report = {'imported': 0, 'duplicates': 0, 'rejected': [], 'rows': len(frame),
-              'categorised': Counter(), 'credits': 0, 'salary_rows': 0}
+              'categorised': Counter(), 'credits': 0, 'salary_rows': 0,
+              'merged_email': 0}
     occurrences = Counter()
 
     # One transaction, one INSERT, all inside a single transaction block so a
@@ -327,6 +399,12 @@ def import_statement(conn, user_id, filepath, today=None):
                 category_name, confidence, source = categorization.classify(
                     description, amount, date_string)
                 report['categorised'][category_name] += 1
+
+            if txn_type == 'DEBIT' and _merge_into_email_receipt(
+                    conn, user_id, date_value, description, amount, digest,
+                    category_name, confidence, source):
+                report['merged_email'] += 1
+                continue
 
             cursor = conn.execute(
                 'INSERT OR IGNORE INTO Transaction_Record '

@@ -78,7 +78,7 @@ def login():
                 return render_template('login.html'), 429
             if security.verify_password(conn, request.form.get('password')):
                 security.reset_login_attempts(client)
-                security.start_session()
+                security.start_session(conn)
                 # Only same-site relative paths: '//host' is rejected too.
                 destination = security.safe_next(request.args.get('next'))
                 return redirect(destination or url_for('dashboard'))
@@ -96,6 +96,53 @@ def logout():
     session.clear()
     flash('You have been signed out.', 'info')
     return redirect(url_for('login'))
+
+
+@app.route('/reset-password', methods=('GET', 'POST'))
+def reset_password():
+    """Offline password reset by verifying the local user's profile details."""
+    conn = get_db_connection()
+    try:
+        if not database.get_user(conn) or not security.password_is_set(conn):
+            return redirect(url_for('setup'))
+
+        if request.method == 'POST':
+            client = request.remote_addr or 'local'
+            wait = security.login_lockout_remaining(client)
+            if wait:
+                flash(f'Too many incorrect attempts. Try again in {wait} '
+                      'seconds.', 'error')
+                return render_template('reset_password.html', form=request.form), 429
+
+            if not security.verify_profile_for_reset(
+                    conn,
+                    request.form.get('full_name'),
+                    request.form.get('salary_amount'),
+                    request.form.get('salary_day')):
+                security.record_failed_login(client)
+                flash('Those profile details do not match the account on this '
+                      'device.', 'error')
+                return render_template('reset_password.html', form=request.form)
+
+            password = request.form.get('password') or ''
+            if password != (request.form.get('password_confirm') or ''):
+                flash('The two passwords do not match.', 'error')
+                return render_template('reset_password.html', form=request.form)
+
+            ok, err = security.set_password(conn, password)
+            if not ok:
+                flash(err, 'error')
+                return render_template('reset_password.html', form=request.form)
+
+            security.reset_login_attempts(client)
+            session.clear()
+            flash('Your password has been reset. Please sign in with your new '
+                  'password.', 'success')
+            return redirect(url_for('login'))
+
+        return render_template('reset_password.html', form={})
+    finally:
+        conn.close()
 
 
 @app.route('/setup', methods=('GET', 'POST'))
@@ -174,7 +221,7 @@ def require_setup():
     # The PWA service worker and offline page are public infrastructure: a
     # browser fetches /sw.js with no session, and /offline must render even when
     # unauthenticated, so neither is redirected to setup.
-    if request.endpoint in {'setup', 'login', 'static',
+    if request.endpoint in {'setup', 'login', 'reset_password', 'static',
                             'service_worker', 'offline', None}:
         return None
     conn = get_db_connection()
@@ -716,6 +763,10 @@ def _handle_upload(conn, user):
                f"{report['rows']} row(s).")
     if report['duplicates']:
         message += f" {report['duplicates']} duplicate(s) skipped."
+    if report.get('merged_email'):
+        message += (f" {report['merged_email']} matched purchase(s) already added "
+                    "from your email receipts; the bank's details were applied "
+                    "and the items kept.")
     if report['salary_rows']:
         message += f" {report['salary_rows']} salary credit(s) identified."
     if pipeline['relabelled']:
@@ -1209,93 +1260,114 @@ def leave_household():
 
 # --- Auto-Fetch Receipts ---------------------------------------------------
 
+IMAP_EMAIL_SETTING = 'imap_email'
+
+
 @app.route('/auto-fetch-receipts', methods=['POST'])
 @security.login_required
 def auto_fetch_receipts():
-    """Pull receipt attachments from the user's inbox over IMAP and OCR them.
+    """Read emailed receipts from the user's inbox: itemise the transactions
+    they match, and add the purchases the bank hasn't shown yet.
 
-    Only receipts that are actually found and read are itemised; a transaction
-    with no matching email, or whose attachment cannot be scanned, is left
-    alone rather than given made-up items.
+    The address and app password come from the Settings form (or, failing
+    that, the IMAP_EMAIL / IMAP_PASSWORD environment variables). The password
+    is used for this one sign-in and never stored or logged; only the address
+    is remembered, to pre-fill the form. Receipts are matched to transactions
+    by merchant, date and amount (services/email_receipts.py); only receipts
+    that were actually found and read are used. A receipt with no matching
+    transaction becomes a new one, which a later statement upload merges with
+    the bank's row rather than duplicating (services/ingestion.py).
     """
     _demo_only()
     import os
-    email_address = os.environ.get('IMAP_EMAIL')
-    app_password = os.environ.get('IMAP_PASSWORD')
+    import imaplib
+    import socket
+    from services import email_receipts, fx
+    from services.imap_fetcher import connect_imap, parse_transaction_date
+    from services.ocr import EMAIL_RECEIPT_MERCHANTS, emails_receipt, scan_receipt
+    from ml.categorization import normalise
+
+    email_address = (request.form.get('imap_email') or
+                     os.environ.get('IMAP_EMAIL') or '').strip()
+    app_password = request.form.get('imap_password') or os.environ.get('IMAP_PASSWORD') or ''
     if not (email_address and app_password):
-        flash('Email receipt fetching is not set up. Set the IMAP_EMAIL and '
-              'IMAP_PASSWORD environment variables (for Gmail, use an app '
-              'password) and restart the app.', 'error')
-        return redirect(url_for('transactions'))
+        flash('Email receipt scanning is not set up. Enter your email address '
+              'and an app password under Settings → Email receipts.', 'error')
+        return redirect(url_for('settings'))
 
     conn = database.get_db_connection()
     try:
         user = database.get_user(conn)
-        
-        from services.ocr import (ReceiptScanError, scan_receipt, emails_receipt,
-                                  EMAIL_RECEIPT_MERCHANTS)
-        from services.imap_fetcher import connect_imap, fetch_receipt_attachment
-        
-        query = """
-            SELECT t.transaction_id, t.description, t.amount, c.category_name, t.transaction_date
+        database.set_setting(conn, IMAP_EMAIL_SETTING, email_address)
+        conn.commit()
+
+        unitemised = conn.execute("""
+            SELECT t.transaction_id, t.description, t.amount, t.transaction_date
             FROM Transaction_Record t
-            LEFT JOIN Category c ON t.category_id = c.category_id
             WHERE t.user_id = ? AND t.transaction_type = 'DEBIT'
-            AND t.is_subscription = 0 AND t.is_salary = 0
-            AND NOT EXISTS (
-                SELECT 1 FROM Receipt_Item r WHERE r.transaction_id = t.transaction_id
-            )
+              AND t.is_salary = 0
+              AND NOT EXISTS (SELECT 1 FROM Receipt_Item r
+                              WHERE r.transaction_id = t.transaction_id)
             ORDER BY t.transaction_date DESC
-            LIMIT 10
-        """
-        unitemized = conn.execute(query, (user['user_id'],)).fetchall()
-        
+            LIMIT 40
+        """, (user['user_id'],)).fetchall()
         # Only merchants that email a digital receipt are worth searching for.
-        eligible = [txn for txn in unitemized if emails_receipt(txn['description'])]
-        
-        if not eligible:
-            flash("No recent transactions are from merchants that email receipts.", "info")
-            return redirect(url_for('transactions'))
+        eligible = [t for t in unitemised if emails_receipt(t['description'])][:15]
 
         try:
             mail = connect_imap(email_address, app_password)
-        except Exception as e:
-            print(f"[IMAP] Connection failed: {e}")
-            flash('Could not sign in to your mailbox. Check IMAP_EMAIL and '
-                  'IMAP_PASSWORD.', 'error')
-            return redirect(url_for('transactions'))
+        except imaplib.IMAP4.error:
+            flash('Your mail provider refused the sign-in. Check the address, '
+                  'and use an app password rather than your normal password '
+                  '(for Gmail: Google Account → Security → App passwords).', 'error')
+            return redirect(url_for('settings'))
+        except (OSError, socket.timeout):
+            flash('Could not reach your mail server. Check your internet '
+                  'connection and try again.', 'error')
+            return redirect(url_for('settings'))
+        finally:
+            app_password = None  # used once; drop the reference
 
-        itemised, not_found, unreadable = [], 0, []
+        itemised, review, unreadable, ambiguous, not_found = [], [], [], [], 0
+        used_messages = set()
+        sweep, stored = email_receipts.SweepResult(), {'added': [], 'itemised': []}
+        # Fetches exchange rates only if a foreign-currency receipt turns up.
+        converter = fx.Converter(conn)
         try:
             for txn in eligible:
-                desc_lower = txn['description'].lower()
-                keyword = next((kw for kw in EMAIL_RECEIPT_MERCHANTS if kw in desc_lower), desc_lower)
-
+                text = normalise(txn['description'])
+                # Longest keyword first, so 'uber eats' wins over 'uber'.
+                keyword = max((kw for kw in EMAIL_RECEIPT_MERCHANTS if kw in text),
+                              key=len)
                 try:
-                    temp_path = fetch_receipt_attachment(mail, keyword, days_back=14)
-                except Exception as e:
-                    print(f"[IMAP] Failed to fetch {keyword}: {e}")
-                    temp_path = None
-                if not temp_path:
+                    result = email_receipts.find_receipt_for(
+                        mail, keyword, parse_transaction_date(txn['transaction_date']),
+                        float(txn['amount']), scan_receipt, converter=converter)
+                except Exception as error:  # one bad search must not 500 the scan
+                    app.logger.warning('Email receipt search failed for %s: %s',
+                                       keyword, error)
+                    result = email_receipts.EmailReceiptResult(email_receipts.NOT_FOUND)
+
+                label = f"{txn['description']} ({float(txn['amount']):,.2f})"
+                if result.usable:
+                    used_messages.add(result.message_key)
+                    _insert_receipt_items(conn, txn['transaction_id'], result.scan.items)
+                    (itemised if result.status == email_receipts.MATCHED
+                     else review).append(label)
+                elif result.status == email_receipts.UNREADABLE:
+                    unreadable.append(label)
+                elif result.status == email_receipts.AMBIGUOUS:
+                    ambiguous.append(label)
+                else:
                     not_found += 1
-                    continue
 
-                try:
-                    scan = scan_receipt(temp_path)
-                except ReceiptScanError as e:
-                    print(f"[OCR] {txn['description']}: {e}")
-                    scan = None
-                finally:
-                    try:
-                        os.remove(temp_path)
-                    except OSError:
-                        pass
-
-                if not scan or not scan.items:
-                    unreadable.append(txn['description'])
-                    continue
-                _insert_receipt_items(conn, txn['transaction_id'], scan.items)
-                itemised.append(txn['description'])
+            # Pass 2: receipts for purchases the bank hasn't shown yet.
+            try:
+                sweep = email_receipts.read_new_receipts(
+                    mail, scan_receipt, skip_keys=used_messages, converter=converter)
+            except Exception as error:  # an odd mailbox must not 500 the scan
+                app.logger.warning('Email receipt sweep failed: %s', error)
+            stored = email_receipts.add_receipts(conn, user['user_id'], sweep.receipts)
         finally:
             try:
                 mail.logout()
@@ -1303,18 +1375,45 @@ def auto_fetch_receipts():
                 pass
 
         conn.commit()
+        itemised += stored['itemised']
 
         if itemised:
-            flash(f"Itemised {len(itemised)} emailed receipt(s): {', '.join(itemised)}.", "success")
+            flash(f"Itemised {len(itemised)} emailed receipt(s) that match the "
+                  f"amount: {', '.join(itemised)}.", 'success')
+        if review:
+            flash(f"Itemised {len(review)} receipt(s) whose total differs from "
+                  f"the bank amount. Check them: {', '.join(review)}.", 'warning')
+        if ambiguous:
+            flash(f"Several receipts were close to {', '.join(ambiguous)} and "
+                  "none matched the amount, so nothing was added. Add those "
+                  "items by hand.", 'warning')
         if unreadable:
-            flash(f"Found but could not read receipts for: {', '.join(unreadable)}. "
-                  "Add those items manually.", "warning")
-        if not itemised and not unreadable:
-            flash(f"Searched your inbox for {not_found} transaction(s) but found no "
-                  "receipt attachments from the last 14 days.", "info")
+            flash(f"Found emails but could not read the items for: "
+                  f"{', '.join(unreadable)}. Add those items by hand.", 'warning')
+        if stored['added']:
+            flash(f"Added {len(stored['added'])} purchase(s) from your email "
+                  f"receipts: {', '.join(stored['added'])}. When your bank "
+                  "statement includes them, uploading it will merge them rather "
+                  "than add them twice.", 'success')
+        if converter.as_of:  # set only when a conversion was needed
+            note = (f"Receipts in another currency were converted to "
+                    f"{config.CURRENCY} at the rate of {converter.as_of}")
+            note += (" (the rate service couldn't be reached, so the last saved "
+                     "rates were used)" if converter.stale else "")
+            flash(note + ". These amounts are estimates: uploading your bank "
+                  "statement replaces them with what the bank charged.", 'info')
+        if sweep.foreign_currency:
+            flash(f"Couldn't convert receipt(s) priced in another currency, "
+                  f"because no exchange rate was available: "
+                  f"{', '.join(sweep.foreign_currency)}. Scan again when you're "
+                  f"online, or they will appear when your bank statement is "
+                  f"uploaded.", 'warning')
+        if not (itemised or review or ambiguous or unreadable or stored['added']
+                or sweep.foreign_currency):
+            flash('No new receipt emails were found in the last 30 days.', 'info')
     finally:
         conn.close()
-        
+
     return redirect(url_for('transactions'))
 
 # --- Settings --------------------------------------------------------------
@@ -1331,7 +1430,9 @@ def settings():
             categorisation=database.latest_metric(conn, 'CATEGORISATION'),
             forecasting_metric=database.latest_metric(conn, 'FORECASTING'),
             target_f1=config.TARGET_F1, max_mae_ratio=config.MAX_MAE_RATIO,
-            db_path=config.DATABASE_PATH, ocr_status=ocr_status())
+            db_path=config.DATABASE_PATH, ocr_status=ocr_status(),
+            imap_email=(database.get_setting(conn, IMAP_EMAIL_SETTING)
+                        or os.environ.get('IMAP_EMAIL', '')))
     finally:
         conn.close()
 
@@ -1388,6 +1489,102 @@ def retrain():
         conn.close()
 
 
+@app.route('/settings/profile', methods=('POST',))
+@security.login_required
+def update_profile():
+    """Update the user's name, monthly salary or pay day (e.g. after a promotion).
+
+    These three details are also what the offline password reset checks, so a
+    change needs the current password, like Change password does. Otherwise
+    anyone at an unlocked device could set them to values they know, sign out
+    and reset the password through /reset-password.
+    """
+    full_name = ' '.join((request.form.get('full_name') or '').split())
+    errors = []
+    if not full_name or len(full_name) > 80:
+        errors.append('Enter your name (up to 80 characters).')
+
+    try:
+        salary_amount = round(float(request.form.get('salary_amount') or 0), 2)
+        if not salary_amount > 0:  # also rejects NaN
+            errors.append('Salary amount must be greater than zero.')
+        elif salary_amount > config.MAX_TRANSACTION_AMOUNT:
+            errors.append(f'Salary amount must be at most '
+                          f'{config.MAX_TRANSACTION_AMOUNT:,.0f} {config.CURRENCY}.')
+    except (ValueError, OverflowError):
+        salary_amount = 0.0
+        errors.append('Salary amount must be a valid number.')
+
+    try:
+        salary_day = int(request.form.get('salary_day') or 0)
+        if not 1 <= salary_day <= 31:
+            errors.append('Pay day must be between 1 and 31.')
+    except ValueError:
+        salary_day = 0
+        errors.append('Pay day must be a whole number between 1 and 31.')
+
+    # No #anchor: the result is flashed at the top of the page.
+    back = redirect(url_for('settings'))
+    if errors:
+        for message in errors:
+            flash(message, 'error')
+        return back
+
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        old_salary = float(user['salary_amount'])
+        old_day = int(user['salary_day'])
+        income_changed = abs(salary_amount - old_salary) >= 0.01 or salary_day != old_day
+        if not income_changed and full_name == user['full_name']:
+            flash('Nothing to update: those are already your profile details.', 'info')
+            return back
+
+        # Same throttle as sign-in and Change password.
+        client = request.remote_addr or 'local'
+        wait = security.login_lockout_remaining(client)
+        if wait:
+            flash(f'Too many incorrect attempts. Try again in {wait} seconds.', 'error')
+            return back
+        if not security.verify_password(conn, request.form.get('current_password')):
+            security.record_failed_login(client)
+            flash('Enter your current password to save profile changes.', 'error')
+            return back
+        security.reset_login_attempts(client)
+
+        conn.execute(
+            'UPDATE User SET full_name = ?, salary_amount = ?, salary_day = ? '
+            'WHERE user_id = ?',
+            (full_name, salary_amount, salary_day, user['user_id']))
+
+        recalculated = False
+        if income_changed:
+            # Re-run salary detection so any recently imported paycheck at the
+            # new salary level is flagged, while keeping historical paychecks.
+            ingestion.detect_salary(conn, user['user_id'])
+            updated_user = database.get_user(conn)
+            if behavioural.learning_status(conn, updated_user)['complete']:
+                budget_data = recommendation.build_budget(conn, updated_user)
+                recommendation.persist_recommendations(
+                    conn, updated_user['user_id'], budget_data)
+                recalculated = True
+        conn.commit()
+
+        if income_changed:
+            message = (f'Income updated to {salary_amount:,.2f} {config.CURRENCY}, '
+                       f'paid on day {salary_day}. ')
+            message += ('Your budget recommendations and savings capacity have been '
+                        'recalculated.' if recalculated else
+                        'Your budget will use it once the learning phase is complete.')
+        else:
+            message = 'Profile updated.'
+        flash(message + ' Use these details if you ever need to reset your password.',
+              'success')
+        return back
+    finally:
+        conn.close()
+
+
 @app.route('/settings/categories/add', methods=('POST',))
 @security.login_required
 def add_category():
@@ -1414,6 +1611,52 @@ def add_category():
     finally:
         conn.close()
     return redirect(url_for('settings'))
+
+@app.route('/settings/password', methods=('POST',))
+@security.login_required
+def change_password():
+    """Change the password while signed in from the Settings screen."""
+    # No #anchor: the result is flashed at the top of the page, where the user
+    # lands after the redirect.
+    back = redirect(url_for('settings'))
+    conn = get_db_connection()
+    try:
+        # Shares the login throttle: an unattended, signed-in device must not
+        # let someone try password after password to learn the real one.
+        client = request.remote_addr or 'local'
+        wait = security.login_lockout_remaining(client)
+        if wait:
+            flash(f'Too many incorrect attempts. Try again in {wait} seconds.',
+                  'error')
+            return back
+        if not security.verify_password(conn, request.form.get('current_password')):
+            security.record_failed_login(client)
+            flash('Current password is incorrect.', 'error')
+            return back
+        security.reset_login_attempts(client)
+
+        new_password = request.form.get('new_password') or ''
+        if new_password != (request.form.get('password_confirm') or ''):
+            flash('The new passwords do not match.', 'error')
+            return back
+        if security.verify_password(conn, new_password):
+            flash('The new password is the same as the current one. Choose a '
+                  'different password.', 'error')
+            return back
+
+        ok, err = security.set_password(conn, new_password)
+        if not ok:
+            flash(err, 'error')
+            return back
+
+        # set_password signed out every session; keep this one signed in.
+        security.start_session(conn)
+        flash('Your password has been updated. Any other device using the app '
+              'will need to sign in again.', 'success')
+        return back
+    finally:
+        conn.close()
+
 
 @app.route('/settings/export')
 @security.login_required

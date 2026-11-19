@@ -379,6 +379,20 @@ class SalaryDetectionTests(unittest.TestCase):
             chosen = ingestion.detect_salary(conn, uid)
             self.assertEqual(len(chosen), 1)
 
+    def test_salary_promotion_preserves_historical_salary_flags(self):
+        # Months 4 and 5 earned 10,000; then the user is promoted to 16,000 in Month 6.
+        self._credit('2026-04-25', 10000.0, 'SALARY APRIL')
+        self._credit('2026-05-25', 10000.0, 'SALARY MAY')
+        ingestion.detect_salary(self.conn, self.user_id)
+        self.assertEqual(self._flagged_dates(), {'2026-04-25', '2026-05-25'})
+
+        self.conn.execute('UPDATE User SET salary_amount = 16000.0 WHERE user_id = ?',
+                          (self.user_id,))
+        self._credit('2026-06-25', 16000.0, 'SALARY JUNE PROMOTION')
+        ingestion.detect_salary(self.conn, self.user_id)
+        self.assertEqual(self._flagged_dates(),
+                         {'2026-04-25', '2026-05-25', '2026-06-25'})
+
 
 if __name__ == '__main__':
     unittest.main()

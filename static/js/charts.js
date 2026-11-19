@@ -8,12 +8,32 @@
 (function () {
     'use strict';
 
-    var PALETTE = {
-        budget: '#14532d',
-        actual: '#b45309',
-        grid: '#e3e9f0',
-        ink: '#5b6b7f'
-    };
+    function currentPalette() {
+        var resolved = document.documentElement.getAttribute('data-resolved-theme');
+        if (!resolved) {
+            var mode = document.documentElement.getAttribute('data-theme') || 'system';
+            var prefersDark = window.matchMedia &&
+                              window.matchMedia('(prefers-color-scheme: dark)').matches;
+            resolved = (mode === 'dark' || (mode === 'system' && prefersDark))
+                ? 'dark' : 'light';
+        }
+        if (resolved === 'dark') {
+            return {
+                budget: '#22c55e',
+                actual: '#fbbf24',
+                grid: '#283648',
+                ink: '#9bb0c7'
+            };
+        }
+        return {
+            budget: '#14532d',
+            actual: '#b45309',
+            grid: '#e3e9f0',
+            ink: '#5b6b7f'
+        };
+    }
+
+    var activeCharts = [];
 
     function readData(id) {
         var holder = document.getElementById(id);
@@ -98,16 +118,18 @@
             return;
         }
 
-        new window.Chart(canvas.getContext('2d'), {
+        var pal = currentPalette();
+        var chart = new window.Chart(canvas.getContext('2d'), {
             type: options.type || 'bar',
             data: {
                 labels: data.labels,
                 datasets: sets.map(function (set) {
                     return {
                         label: set.label,
+                        role: set.role,
                         data: set.values,
                         backgroundColor: set.role === 'actual'
-                            ? PALETTE.actual : PALETTE.budget,
+                            ? pal.actual : pal.budget,
                         borderRadius: 4,
                         maxBarThickness: 42
                     };
@@ -117,7 +139,7 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
-                    legend: { display: sets.length > 1, labels: { boxWidth: 12 } },
+                    legend: { display: sets.length > 1, labels: { boxWidth: 12, color: pal.ink } },
                     tooltip: {
                         callbacks: {
                             label: function (context) {
@@ -130,13 +152,14 @@
                 scales: {
                     y: {
                         beginAtZero: true,
-                        grid: { color: PALETTE.grid },
-                        ticks: { color: PALETTE.ink, callback: money }
+                        grid: { color: pal.grid },
+                        ticks: { color: pal.ink, callback: money }
                     },
-                    x: { grid: { display: false }, ticks: { color: PALETTE.ink } }
+                    x: { grid: { display: false }, ticks: { color: pal.ink } }
                 }
             }
         });
+        activeCharts.push(chart);
     }
 
     document.addEventListener('DOMContentLoaded', function () {
@@ -149,5 +172,26 @@
         buildBar('cycleChart', 'cycle-chart-data', [
             { key: 'values', label: 'Spending', role: 'budget' }
         ], { currency: currency });
+
+        window.addEventListener('themechange', function () {
+            var pal = currentPalette();
+            activeCharts.forEach(function (chart) {
+                chart.data.datasets.forEach(function (ds) {
+                    ds.backgroundColor = ds.role === 'actual' ? pal.actual : pal.budget;
+                });
+                if (chart.options.scales && chart.options.scales.y) {
+                    chart.options.scales.y.grid.color = pal.grid;
+                    chart.options.scales.y.ticks.color = pal.ink;
+                }
+                if (chart.options.scales && chart.options.scales.x) {
+                    chart.options.scales.x.ticks.color = pal.ink;
+                }
+                if (chart.options.plugins && chart.options.plugins.legend &&
+                        chart.options.plugins.legend.labels) {
+                    chart.options.plugins.legend.labels.color = pal.ink;
+                }
+                chart.update('none');
+            });
+        });
     });
 }());

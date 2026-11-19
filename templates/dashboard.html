@@ -6,7 +6,8 @@
     <div>
         <h1>Hello, {{ user['full_name'].split()[0] }}</h1>
         <p class="lede">Salary {{ user['salary_amount']|money }} {{ currency }},
-        paid on day {{ user['salary_day'] }} of each month.</p>
+        paid on day {{ user['salary_day'] }} of each month.
+        <a href="{{ url_for('settings') }}#profile" class="text-link inline">Update salary</a></p>
     </div>
 </div>
 

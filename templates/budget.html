@@ -22,6 +22,7 @@ figure below can be traced back to the data it came from.</p>
     <div class="stat">
         <div class="label">Salary</div>
         <div class="value">{{ budget.salary|money }}</div>
+        <div class="sub"><a href="{{ url_for('settings') }}#profile" class="text-link small">Update salary</a></div>
     </div>
     <div class="stat">
         <div class="label">Essentials</div>
@@ -72,7 +73,7 @@ figure below can be traced back to the data it came from.</p>
             <tbody>
                 {% for row in budget.rows %}
                 <tr>
-                    <td data-label="Category">
+                    <td data-label="Category" class="cell-title">
                         <strong>{{ row.category }}</strong>
                         <details class="explain">
                             <summary>How was this worked out?</summary>
@@ -86,7 +87,7 @@ figure below can be traced back to the data it came from.</p>
                     <td data-label="Recommended" class="num"><strong>{{ row.recommended|money }}</strong></td>
                     <td data-label="% of salary" class="num">{{ row.pct_of_salary }}%</td>
                     <td data-label="Spent so far" class="num">{{ row.spent|money }}</td>
-                    <td data-label="Status">
+                    <td data-label="Status" class="cell-status">
                         <span class="badge {{ row.status }}">
                             {% if row.status == 'over' %}over budget
                             {% elif row.status == 'warning' %}{{ row.used_pct|round(0)|int }}% used

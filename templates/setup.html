@@ -37,16 +37,20 @@
         <div class="field">
             <label for="password">Create a password</label>
             <input type="password" id="password" name="password" required
-                   minlength="8" autocomplete="new-password">
+                   minlength="8" autocomplete="new-password" data-password-field>
             <p class="hint">At least 8 characters. This unlocks the app on every
-            launch. It cannot be recovered, so choose one you will remember.</p>
+            launch. If you forget it later, you can reset it using your profile details.</p>
         </div>
 
         <div class="field">
             <label for="password_confirm">Confirm password</label>
             <input type="password" id="password_confirm" name="password_confirm"
-                   required minlength="8" autocomplete="new-password">
+                   required minlength="8" autocomplete="new-password" data-password-field>
         </div>
+        <label class="show-password">
+            <input type="checkbox" data-toggle-passwords>
+            Show password
+        </label>
 
         <div class="notice">
             <strong>How your data is handled</strong>

@@ -3,22 +3,98 @@
    colour-coded status, and a layout that reflows to mobile widths (NFR-08). */
 
 :root {
+    color-scheme: light;
     --ink: #14202e;
     --ink-soft: #5b6b7f;
     --line: #dde4ec;
     --surface: #ffffff;
+    --surface-subtle: #fafcfe;
     --canvas: #f2f5f9;
+    --track: #e9eef4;
+    --topbar-bg: #14532d;
+    --btn-bg: #14532d;
     --brand: #14532d;
     --brand-soft: #e6f2ea;
+    --brand-border: #c6e0d1;
     --ok: #1c7a4a;
     --warn: #b45309;
     --warn-soft: #fef3c7;
+    --warn-border: #fadfa6;
     --danger: #b02a2a;
     --danger-soft: #fdecec;
+    --danger-border: #f6c9c9;
     --info: #1d4ed8;
     --info-soft: #e8effd;
+    --info-border: #cbdafb;
+    --sub-bg: #f3e8ff;
+    --sub-ink: #6b21a8;
+    --sub-border: #e4d0fb;
     --radius: 10px;
     --shadow: 0 1px 3px rgba(20, 32, 46, .09), 0 6px 18px rgba(20, 32, 46, .05);
+}
+
+/* Dark palette: applied when the user explicitly selects Dark mode, OR when
+   the theme is set to System default (or unset) and the device OS prefers dark. */
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --ink: #e6edf5;
+    --ink-soft: #9bb0c7;
+    --line: #283648;
+    --surface: #161f2c;
+    --surface-subtle: #1c2737;
+    --canvas: #0d131b;
+    --track: #243244;
+    --topbar-bg: #0f3d21;
+    --btn-bg: #1b7a43;
+    --brand: #4ade80;
+    --brand-soft: #132a1e;
+    --brand-border: #234d35;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --warn-soft: #2b200a;
+    --warn-border: #5c4312;
+    --danger: #f87171;
+    --danger-soft: #2d1418;
+    --danger-border: #63262e;
+    --info: #60a5fa;
+    --info-soft: #142238;
+    --info-border: #27446e;
+    --sub-bg: #261738;
+    --sub-ink: #d8b4fe;
+    --sub-border: #4c2d73;
+    --shadow: 0 2px 6px rgba(0, 0, 0, .35), 0 8px 24px rgba(0, 0, 0, .25);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --ink: #e6edf5;
+        --ink-soft: #9bb0c7;
+        --line: #283648;
+        --surface: #161f2c;
+        --surface-subtle: #1c2737;
+        --canvas: #0d131b;
+        --track: #243244;
+        --topbar-bg: #0f3d21;
+        --btn-bg: #1b7a43;
+        --brand: #4ade80;
+        --brand-soft: #132a1e;
+        --brand-border: #234d35;
+        --ok: #4ade80;
+        --warn: #fbbf24;
+        --warn-soft: #2b200a;
+        --warn-border: #5c4312;
+        --danger: #f87171;
+        --danger-soft: #2d1418;
+        --danger-border: #63262e;
+        --info: #60a5fa;
+        --info-soft: #142238;
+        --info-border: #27446e;
+        --sub-bg: #261738;
+        --sub-ink: #d8b4fe;
+        --sub-border: #4c2d73;
+        --shadow: 0 2px 6px rgba(0, 0, 0, .35), 0 8px 24px rgba(0, 0, 0, .25);
+    }
 }
 
 * { box-sizing: border-box; }
@@ -33,7 +109,7 @@ body {
 
 /* --- Navigation --------------------------------------------------------- */
 .topbar {
-    background: var(--brand);
+    background: var(--topbar-bg);
     color: #fff;
     padding: .75rem 1.25rem;
     display: flex;
@@ -114,7 +190,7 @@ table { width: 100%; border-collapse: collapse; font-size: .92rem; }
 th, td { padding: .6rem .65rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
 th { font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); font-weight: 700; white-space: nowrap; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-tbody tr:hover { background: #fafcfe; }
+tbody tr:hover { background: var(--surface-subtle); }
 
 /* Label/value tables (Settings cards, Savings goal cards). Their value column
    can hold prose — model names, notes — so it must be allowed to wrap: the
@@ -134,15 +210,15 @@ table.kv td.num { white-space: normal; overflow-wrap: break-word; }
     border: 1px solid var(--line);
     white-space: nowrap;
 }
-.badge.essential { background: var(--brand-soft); color: var(--brand); border-color: #c6e0d1; }
-.badge.discretionary { background: var(--info-soft); color: var(--info); border-color: #cbdafb; }
-.badge.ok { background: var(--brand-soft); color: var(--ok); border-color: #c6e0d1; }
-.badge.warning { background: var(--warn-soft); color: var(--warn); border-color: #fadfa6; }
-.badge.over { background: var(--danger-soft); color: var(--danger); border-color: #f6c9c9; }
-.badge.sub { background: #f3e8ff; color: #6b21a8; border-color: #e4d0fb; }
+.badge.essential { background: var(--brand-soft); color: var(--brand); border-color: var(--brand-border); }
+.badge.discretionary { background: var(--info-soft); color: var(--info); border-color: var(--info-border); }
+.badge.ok { background: var(--brand-soft); color: var(--ok); border-color: var(--brand-border); }
+.badge.warning { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-border); }
+.badge.over { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+.badge.sub { background: var(--sub-bg); color: var(--sub-ink); border-color: var(--sub-border); }
 
 /* --- Progress bars ------------------------------------------------------ */
-.bar { background: #e9eef4; border-radius: 999px; height: 8px; overflow: hidden; margin: .35rem 0; }
+.bar { background: var(--track); border-radius: 999px; height: 8px; overflow: hidden; margin: .35rem 0; }
 .bar > span { display: block; height: 100%; background: var(--ok); border-radius: 999px; }
 .bar.warning > span { background: var(--warn); }
 .bar.over > span { background: var(--danger); }
@@ -161,7 +237,7 @@ table.kv td.num { white-space: normal; overflow-wrap: break-word; }
 .flashes li.warning, .alert.warning { border-color: var(--warn); background: var(--warn-soft); }
 .flashes li.success, .alert.success { border-color: var(--ok); background: var(--brand-soft); }
 
-.nudge { border: 1px solid var(--line); border-left: 4px solid var(--info); border-radius: 8px; padding: .75rem .9rem; margin-bottom: .6rem; background: #fff; }
+.nudge { border: 1px solid var(--line); border-left: 4px solid var(--info); border-radius: 8px; padding: .75rem .9rem; margin-bottom: .6rem; background: var(--surface); }
 .nudge.critical { border-left-color: var(--danger); }
 .nudge.warning { border-left-color: var(--warn); }
 .nudge.info { border-left-color: var(--info); }
@@ -170,21 +246,24 @@ table.kv td.num { white-space: normal; overflow-wrap: break-word; }
 
 /* --- Forms -------------------------------------------------------------- */
 label { display: block; font-weight: 600; font-size: .87rem; margin-bottom: .25rem; }
-input[type=text], input[type=number], input[type=date], input[type=password], input[type=file], select {
+input[type=text], input[type=number], input[type=date], input[type=password], input[type=email], input[type=file], select {
     width: 100%;
     padding: .55rem .65rem;
     border: 1px solid var(--line);
     border-radius: 7px;
     font: inherit;
-    background: #fff;
+    background: var(--surface);
     color: var(--ink);
 }
 input:focus, select:focus { outline: 2px solid var(--brand); outline-offset: 1px; border-color: var(--brand); }
 .field { margin-bottom: .9rem; }
 .field .hint { font-size: .8rem; color: var(--ink-soft); margin-top: .2rem; }
+/* In-text links keep the theme's colour after being visited (the browser's
+   default purple is unreadable on the dark theme). */
+.card p a:not(.button), .card li a:not(.button) { color: var(--brand); }
 
 button, .button {
-    background: var(--brand);
+    background: var(--btn-bg);
     color: #fff;
     border: 1px solid transparent;
     padding: .55rem 1rem;
@@ -196,7 +275,7 @@ button, .button {
     display: inline-block;
 }
 button:hover, .button:hover { filter: brightness(1.12); }
-button.secondary, .button.secondary { background: #fff; color: var(--ink); border-color: var(--line); }
+button.secondary, .button.secondary { background: var(--surface); color: var(--ink); border-color: var(--line); }
 button.danger, .button.danger { background: var(--danger); }
 button.small, .button.small, select.small { padding: .28rem .55rem; font-size: .82rem; }
 
@@ -227,7 +306,7 @@ button.small, .button.small, select.small { padding: .28rem .55rem; font-size: .
 .receipt-item-amount { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
 .receipt-total { display: flex; justify-content: space-between; gap: .75rem; padding: .45rem 0 .15rem; font-size: .88rem; }
 .receipt-note { margin: .15rem 0 .35rem; font-size: .82rem; }
-tr.receipt-row > td { background: #fafcfe; }
+tr.receipt-row > td { background: var(--surface-subtle); }
 .link-button {
     background: none; border: 0; padding: 0 .3rem; color: var(--ink-soft);
     font-size: 1.05rem; line-height: 1; cursor: pointer;
@@ -248,13 +327,13 @@ tr.receipt-row > td { background: #fafcfe; }
 /* Fallback bars, used when Chart.js is unavailable (fully offline use). */
 .fallback-chart { display: flex; flex-direction: column; gap: .5rem; }
 .fallback-row { display: grid; grid-template-columns: minmax(90px, 1fr) 3fr auto; gap: .5rem; align-items: center; font-size: .85rem; }
-.fallback-track { background: #e9eef4; border-radius: 999px; height: 14px; position: relative; overflow: hidden; }
+.fallback-track { background: var(--track); border-radius: 999px; height: 14px; position: relative; overflow: hidden; }
 .fallback-track > i { position: absolute; inset: 0 auto 0 0; display: block; background: var(--brand); border-radius: 999px; }
 .fallback-track > i.actual { background: var(--warn); opacity: .85; }
 
 /* --- Misc --------------------------------------------------------------- */
 .split { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: space-between; }
-.notice { background: var(--brand-soft); border: 1px solid #c6e0d1; border-radius: var(--radius); padding: 1rem 1.15rem; margin-bottom: 1.25rem; font-size: .9rem; }
+.notice { background: var(--brand-soft); border: 1px solid var(--brand-border); border-radius: var(--radius); padding: 1rem 1.15rem; margin-bottom: 1.25rem; font-size: .9rem; }
 .empty { text-align: center; padding: 2rem 1rem; color: var(--ink-soft); }
 details.explain { margin-top: .3rem; }
 details.explain summary { cursor: pointer; font-size: .8rem; color: var(--info); }
@@ -292,6 +371,38 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
     table.data-table td { display: flex; justify-content: space-between; align-items: center; border: none; padding: 0.5rem; border-bottom: 1px dashed var(--line); text-align: right; }
     table.data-table td:last-child { border-bottom: none; }
     table.data-table td::before { content: attr(data-label); font-weight: 600; color: var(--ink-soft); margin-right: auto; text-align: left; }
+    table.data-table td { gap: .75rem; }
+
+    /* Card title cell: the row's name heads the card on its own line, with its
+       "How was this worked out?" toggle underneath, instead of being squeezed
+       beside a redundant "Category" label. */
+    table.data-table td.cell-title { display: block; text-align: left; padding-bottom: .65rem; }
+    table.data-table td.cell-title::before { content: none; }
+    table.data-table td.cell-title > strong,
+    table.data-table td.cell-title > .cell-heading { display: block; font-size: 1.08rem; font-weight: 700; }
+    table.data-table td.cell-title > .cell-heading + .badge { margin-top: .35rem; }
+    table.data-table td.cell-title details.explain { margin-top: .35rem; }
+    /* The title heads the card even when it isn't the row's first column
+       (Transactions puts Date first). */
+    table.data-table tbody tr:has(> td.cell-title) { display: flex; flex-direction: column; }
+    table.data-table td.cell-title { order: -1; }
+
+    /* Stacked cell: the label sits above full-width controls (Transactions'
+       "Correct it"), instead of the controls being squeezed into the right
+       half of the card. */
+    table.data-table td.cell-stack { display: block; text-align: left; }
+    table.data-table td.cell-stack::before { display: block; margin-bottom: .5rem; }
+    .correct-controls { display: flex; flex-direction: column; gap: .6rem; }
+    table.data-table td.cell-stack .inline-form { flex-direction: row; flex-wrap: nowrap; align-items: center; gap: .5rem; width: 100%; }
+    table.data-table td.cell-stack .inline-form select,
+    table.data-table td.cell-stack .inline-form input[type=file] { flex: 1 1 auto; min-width: 0; width: auto; margin-bottom: 0; }
+    table.data-table td.cell-stack .inline-form button { flex: 0 0 auto; }
+    table.data-table td.cell-stack .manual-items summary { padding: .35rem 0; }
+
+    /* Status cell: label and badge on one line, the progress bar full width
+       beneath them. */
+    table.data-table td.cell-status { flex-wrap: wrap; row-gap: .5rem; }
+    table.data-table td.cell-status .progress-container { flex-basis: 100%; margin-top: 0; }
 
     .inline-form { flex-direction: column; width: 100%; align-items: flex-end; }
     .inline-form input, .inline-form select { width: 100%; max-width: none; margin-bottom: 0.5rem; }
@@ -323,7 +434,7 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
     /* Totals rows (tfoot) get the same stacked-card treatment as tbody rows,
        otherwise they render as a misaligned table fragment on phones. */
     table.data-table tfoot, table.data-table tfoot tr, table.data-table tfoot th { display: block; width: 100%; }
-    table.data-table tfoot tr { margin-bottom: 1rem; background: var(--brand-soft); border: 1px solid #c6e0d1; border-radius: var(--radius); padding: 0.5rem; }
+    table.data-table tfoot tr { margin-bottom: 1rem; background: var(--brand-soft); border: 1px solid var(--brand-border); border-radius: var(--radius); padding: 0.5rem; }
     table.data-table tfoot th { display: flex; justify-content: space-between; align-items: center; border: none; padding: 0.5rem; border-bottom: 1px dashed var(--line); text-align: right; white-space: normal; text-transform: none; font-size: .92rem; color: var(--ink); }
     table.data-table tfoot th:last-child { border-bottom: none; }
     table.data-table tfoot th::before { content: attr(data-label); font-weight: 600; color: var(--ink-soft); margin-right: auto; text-align: left; }
@@ -343,7 +454,7 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
         border-bottom-left-radius: 0; border-bottom-right-radius: 0;
     }
     table.data-table tr.receipt-row {
-        border-top: 1px dashed var(--line); background: #fafcfe;
+        border-top: 1px dashed var(--line); background: var(--surface-subtle);
         border-top-left-radius: 0; border-top-right-radius: 0;
     }
     .receipt-panel { max-width: none; }
@@ -372,7 +483,7 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
 
 @media (max-width: 768px) {
     /* Prevent iOS Safari auto-zoom on form focus and give comfortable touch targets */
-    input[type=text], input[type=number], input[type=date], input[type=password], select {
+    input[type=text], input[type=number], input[type=date], input[type=password], input[type=email], select {
         font-size: 16px;
         min-height: 44px;
     }
@@ -395,3 +506,61 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
         padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
     }
 }
+
+/* --- Show password checkbox --------------------------------------------- */
+.show-password {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    font-weight: 500;
+    font-size: .87rem;
+    color: var(--ink-soft);
+    cursor: pointer;
+    user-select: none;
+    margin: -.15rem 0 .9rem;
+}
+.form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+.form-actions.spread { justify-content: space-between; }
+.text-link { font-size: .9rem; font-weight: 600; color: var(--brand); text-decoration: none; }
+.text-link:hover, .text-link:focus-visible { text-decoration: underline; }
+.text-link.small { font-size: .82rem; }
+.text-link.inline { font-size: .88rem; margin-left: .35rem; white-space: nowrap; }
+
+/* A card reached by an in-page link (e.g. "Update salary" → #profile) is
+   briefly highlighted, so it is obvious which card the link meant. */
+.card[id] { scroll-margin-top: 1rem; }
+.card:target { animation: card-target 2.4s ease-out; }
+@keyframes card-target {
+    0%, 35% { box-shadow: 0 0 0 3px var(--brand); }
+    100% { box-shadow: 0 0 0 3px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .card:target { animation: none; box-shadow: 0 0 0 3px var(--brand); }
+}
+@media (max-width: 768px) {
+    /* Full-width buttons on phones; a text link gets its own 44px tap row. */
+    .form-actions > button, .form-actions > .button { flex: 1 1 100%; text-align: center; }
+    .form-actions .text-link { flex: 1 1 100%; text-align: center; padding: .7rem 0; }
+    .show-password { min-height: 2.75rem; }
+}
+.show-password input[type="checkbox"] {
+    width: auto;
+    min-height: 0;
+    margin: 0;
+    accent-color: var(--brand);
+    cursor: pointer;
+}
+
+/* --- Theme switcher (System / Light / Dark) ----------------------------- */
+.theme-switcher {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: .45rem;
+    margin-top: .25rem;
+}
+.theme-switcher button[aria-pressed="true"] {
+    background: var(--btn-bg);
+    color: #fff;
+    border-color: var(--btn-bg);
+}
+

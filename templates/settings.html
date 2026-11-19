@@ -112,6 +112,20 @@
 </div>
 
 <div class="card">
+    <h2>Appearance</h2>
+    <p class="muted">Choose Light or Dark mode, or let the app follow your phone
+    or computer's system setting automatically.</p>
+    <div class="theme-switcher" role="group" aria-label="Colour theme">
+        <button type="button" class="secondary" data-theme-set="system" aria-pressed="true">System default</button>
+        <button type="button" class="secondary" data-theme-set="light" aria-pressed="false">Light</button>
+        <button type="button" class="secondary" data-theme-set="dark" aria-pressed="false">Dark</button>
+    </div>
+    <p class="muted" id="theme-status-detail" style="margin:.6rem 0 0;" aria-live="polite">
+        Following your device's system appearance.
+    </p>
+</div>
+
+<div class="card">
     <h2>Offline mode</h2>
     {# Filled in by static/js/pwa.js, which checks the service worker on this
        device and explains in plain words why offline mode is or isn't ready. #}
@@ -131,7 +145,9 @@
     <p class="muted" style="word-break:break-all;"><code>{{ db_path }}</code></p>
     <ul class="muted">
         <li>Nothing is transmitted to any server. The app listens on this machine
-        only (127.0.0.1).</li>
+        only (127.0.0.1).{% if demo_features %} The one exception is
+        <a href="#email-receipts">Email receipts</a>, which reads your inbox only
+        when you start a scan.{% endif %}</li>
         <li>Your password is stored as a salted PBKDF2 hash, never as plain text.</li>
         <li>You are signed out automatically after {{ session_timeout }} minutes
         of inactivity.</li>
@@ -156,28 +172,120 @@
     </form>
 </div>
 
+<div class="card" id="profile">
+    <h2>Profile &amp; Income</h2>
+    <p class="muted">Got a promotion, a raise or a new pay date? Update it here.
+    Your budget recommendations and savings capacity are recalculated straight
+    away, and paychecks you received before the change stay recognised as
+    salary.</p>
+    <form method="POST" action="{{ url_for('update_profile') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <div class="grid three">
+            <div class="field">
+                <label for="profile_full_name">Name</label>
+                <input type="text" id="profile_full_name" name="full_name" required
+                       maxlength="80" autocomplete="name" value="{{ user['full_name'] }}">
+            </div>
+            <div class="field">
+                <label for="profile_salary_amount">Monthly salary ({{ currency }})</label>
+                <input type="number" id="profile_salary_amount" name="salary_amount"
+                       step="0.01" min="0.01" required inputmode="decimal"
+                       value="{{ '%.2f'|format(user['salary_amount']) }}">
+            </div>
+            <div class="field">
+                <label for="profile_salary_day">Pay day of the month</label>
+                <input type="number" id="profile_salary_day" name="salary_day"
+                       min="1" max="31" required inputmode="numeric"
+                       value="{{ user['salary_day'] }}">
+            </div>
+        </div>
+        <div class="field">
+            <label for="profile_current_password">Current password</label>
+            <input type="password" id="profile_current_password" name="current_password"
+                   required autocomplete="current-password">
+            <p class="hint">Needed because your name, salary and pay day are also
+            what you use to reset a forgotten password.</p>
+        </div>
+        <div class="form-actions">
+            <button type="submit">Save income &amp; recalculate budget</button>
+        </div>
+        <p class="muted" style="margin:.75rem 0 0;font-size:.82rem;">Profile created {{ user['created_at'] }}.</p>
+    </form>
+</div>
+
 <div class="card">
-    <h2>Profile</h2>
-    <table class="kv" style="font-size:.9rem;">
-        <tr><td>Name</td><td class="num">{{ user['full_name'] }}</td></tr>
-        <tr><td>Monthly salary</td><td class="num">{{ user['salary_amount']|money }} {{ currency }}</td></tr>
-        <tr><td>Pay day</td><td class="num">Day {{ user['salary_day'] }}</td></tr>
-        <tr><td>Profile created</td><td class="num">{{ user['created_at'] }}</td></tr>
-    </table>
+    <h2>Change password</h2>
+    <p class="muted">Update the password that unlocks the app. Any other device
+    signed in to it (your phone, another browser) will be asked to sign in again.</p>
+    <form method="POST" action="{{ url_for('change_password') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <div class="grid three">
+            <div class="field">
+                <label for="current_password">Current password</label>
+                <input type="password" id="current_password" name="current_password"
+                       required autocomplete="current-password" data-password-field>
+            </div>
+            <div class="field">
+                <label for="new_password">New password</label>
+                <input type="password" id="new_password" name="new_password"
+                       required minlength="8" autocomplete="new-password" data-password-field>
+            </div>
+            <div class="field">
+                <label for="password_confirm">Confirm new password</label>
+                <input type="password" id="password_confirm" name="password_confirm"
+                       required minlength="8" autocomplete="new-password" data-password-field>
+            </div>
+        </div>
+        <label class="show-password">
+            <input type="checkbox" data-toggle-passwords>
+            Show passwords
+        </label>
+        <div class="form-actions">
+            <button type="submit">Update password</button>
+        </div>
+    </form>
 </div>
 {% if demo_features %}
-<div class="card" style="margin-top: 1.25rem;">
-    <h2>Integrations & Automations</h2>
-    <div class="split" style="align-items: center;">
-        <div style="max-width: 600px;">
-            <h3 style="margin:0;">Email Receipt Auto-Fetcher</h3>
-            <p class="muted" style="margin-top: 0.5rem;">Searches your inbox for receipt attachments from merchants that email them (like Uber, Amazon, and food delivery), reads them with OCR and adds the line items to the matching transactions. Requires the <code>IMAP_EMAIL</code> and <code>IMAP_PASSWORD</code> environment variables (for Gmail, an app password).</p>
-        </div>
-        <form method="POST" action="{{ url_for('auto_fetch_receipts') }}" style="margin: 0;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-            <button type="submit" class="secondary" onclick="this.innerText='Scanning Inbox...'; this.disabled=true; this.form.submit();">Scan Inbox Now</button>
-        </form>
+<div class="card" id="email-receipts">
+    <h2>Email receipts</h2>
+    <p class="muted">Finds the receipt emails that merchants such as Uber, Yango,
+    food-delivery apps and online shops send you. Each receipt's items are added
+    to the transaction it matches (same amount, within 3 days). A receipt from
+    the last 30 days that matches no transaction is added as a new one, so a
+    purchase shows up before your bank statement does. Uploading the statement
+    later merges the two rather than counting the purchase twice. Items are read
+    from the email itself, or from an attached PDF or photo.</p>
+    <div class="notice">
+        <strong>This is the one feature that goes online.</strong>
+        <p style="margin:.4rem 0 0;">It signs in to your mailbox to read receipts.
+        It only reads: nothing is sent, moved, deleted or marked as read. Your
+        password is used for this one scan and never saved. Only your email
+        address is remembered, so you don't have to type it again. If a receipt
+        is in another currency, the scan also fetches that day's exchange rate
+        to convert it to kwacha. Only the currency code is sent, and the
+        converted amount is replaced by your bank's figure when you upload the
+        statement.</p>
     </div>
+    <form method="POST" action="{{ url_for('auto_fetch_receipts') }}"
+          onsubmit="var b=this.querySelector('button[type=submit]'); b.textContent='Scanning your inbox…'; b.disabled=true;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <div class="grid two">
+            <div class="field">
+                <label for="imap_email">Email address</label>
+                <input type="email" id="imap_email" name="imap_email" required
+                       autocomplete="email" inputmode="email" value="{{ imap_email }}">
+            </div>
+            <div class="field">
+                <label for="imap_password">App password</label>
+                <input type="password" id="imap_password" name="imap_password" required
+                       autocomplete="off">
+                <p class="hint">Not your normal password. For Gmail, turn on
+                2-Step Verification, then create one under Google Account →
+                Security → App passwords.</p>
+            </div>
+        </div>
+        <button type="submit">Scan inbox for receipts</button>
+    </form>
 </div>
 {% endif %}
 

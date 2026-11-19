@@ -182,5 +182,124 @@
                  'Offline mode status could not be checked on this device.');
         });
     });
+
+    /* Theme controller: supports 'system' (default), 'light', and 'dark'.
+     * Persists the user's choice in localStorage ('expense-tracker-theme'),
+     * updates data-theme on <html>, syncs both the topbar quick-cycle button
+     * and the Settings 3-way segmented control, updates <meta name="theme-color">,
+     * and dispatches a 'themechange' event so Chart.js redraws its axes. */
+    var THEME_KEY = 'expense-tracker-theme';
+    var THEME_DESCRIPTIONS = {
+        system: "Following your device's system appearance",
+        light: 'Always using Light mode on this browser.',
+        dark: 'Always using Dark mode on this browser.'
+    };
+    var darkMedia = window.matchMedia
+        ? window.matchMedia('(prefers-color-scheme: dark)')
+        : null;
+
+    function getSavedTheme() {
+        try {
+            var val = localStorage.getItem(THEME_KEY);
+            if (val === 'light' || val === 'dark' || val === 'system') {
+                return val;
+            }
+        } catch (e) {}
+        return 'system';
+    }
+
+    function resolveEffectiveTheme(mode) {
+        if (mode === 'light' || mode === 'dark') {
+            return mode;
+        }
+        return (darkMedia && darkMedia.matches) ? 'dark' : 'light';
+    }
+
+    function applyTheme(mode, persist) {
+        var validMode = (mode === 'light' || mode === 'dark' || mode === 'system')
+            ? mode : 'system';
+        if (persist) {
+            try {
+                localStorage.setItem(THEME_KEY, validMode);
+            } catch (e) {}
+        }
+        var effective = resolveEffectiveTheme(validMode);
+        document.documentElement.setAttribute('data-theme', validMode);
+        document.documentElement.setAttribute('data-resolved-theme', effective);
+
+        var metaTheme = document.querySelector('meta[name="theme-color"]');
+        if (metaTheme) {
+            metaTheme.setAttribute('content', effective === 'dark' ? '#0f3d21' : '#14532d');
+        }
+
+        document.querySelectorAll('[data-theme-set]').forEach(function (btn) {
+            var target = btn.getAttribute('data-theme-set');
+            btn.setAttribute('aria-pressed', target === validMode ? 'true' : 'false');
+        });
+
+        var detail = document.getElementById('theme-status-detail');
+        if (detail) {
+            if (validMode === 'system') {
+                detail.textContent = THEME_DESCRIPTIONS.system +
+                    ' (currently ' + (effective === 'dark' ? 'Dark' : 'Light') + ').';
+            } else {
+                detail.textContent = THEME_DESCRIPTIONS[validMode];
+            }
+        }
+
+        try {
+            window.dispatchEvent(new CustomEvent('themechange', {
+                detail: { mode: validMode, effective: effective }
+            }));
+        } catch (e) {}
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        applyTheme(getSavedTheme(), false);
+
+        document.querySelectorAll('[data-theme-set]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                applyTheme(btn.getAttribute('data-theme-set'), true);
+            });
+        });
+
+        if (darkMedia && typeof darkMedia.addEventListener === 'function') {
+            darkMedia.addEventListener('change', function () {
+                if (getSavedTheme() === 'system') {
+                    applyTheme('system', false);
+                }
+            });
+        }
+    });
+
+    /* "Show password" checkbox: toggles every password input in the same form
+     * between type="password" and type="text" so the user can verify what they
+     * typed before submitting. */
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('input[type="password"]').forEach(function (input) {
+            input.setAttribute('data-password-field', '');
+        });
+        function setVisible(box, visible) {
+            var scope = box.form || document;
+            box.checked = visible;
+            scope.querySelectorAll('input[data-password-field]').forEach(function (field) {
+                field.type = visible ? 'text' : 'password';
+            });
+        }
+        var boxes = document.querySelectorAll('input[data-toggle-passwords]');
+        boxes.forEach(function (box) {
+            box.addEventListener('change', function () { setVisible(box, box.checked); });
+            // Hide again before submitting, so the browser's password manager
+            // still recognises the field and offers to save the password.
+            if (box.form) {
+                box.form.addEventListener('submit', function () { setVisible(box, false); });
+            }
+        });
+        // Coming back with the Back button restores the page from cache; never
+        // leave a password showing there.
+        window.addEventListener('pageshow', function () {
+            boxes.forEach(function (box) { setVisible(box, false); });
+        });
+    });
 })();
 
