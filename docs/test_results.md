@@ -27,7 +27,7 @@ A layered testing strategy was adopted, matching the system's five-layer
 architecture so that each layer could be verified independently. Four
 complementary types of testing were applied:
 
-- **Automated testing** — a suite of 239 unit, integration and end-to-end tests
+- **Automated testing** — a suite of 240 unit, integration and end-to-end tests
   exercising the data, machine-learning, service and presentation layers,
   providing repeatable regression evidence.
 - **Machine-learning verification** — quantitative measurement of the two learning
@@ -336,7 +336,7 @@ Final run on 2026-11-18, after every fix in §8, using full test discovery
 
 | Suite | Tests | Covers | Result |
 |-------|:-----:|--------|:------:|
-| `tests/test_routes.py` | 67 | Pages, auth, security controls, PWA, demo features. Includes `test_nfr01_core_pages_render_within_three_seconds`, the 6 security regression tests (D6–D9), and 3 timer tests: lockout expiry, idle sign-out after 10 minutes, and the idle timer refreshing on activity | PASS |
+| `tests/test_routes.py` | 68 | Pages, auth, security controls, PWA, demo features. Includes `test_nfr01_core_pages_render_within_three_seconds`, the 6 security regression tests (D6–D9), 3 timer tests (lockout expiry, idle sign-out after 10 minutes, the idle timer refreshing on activity), and the offline-mode indicator (D15 diagnostic) | PASS |
 | `tests/test_ml.py` | 43 | Categoriser training/evaluation, forecasting, subscriptions | PASS |
 | `tests/test_ingestion.py` | 41 | CSV parsing, validation, deduplication, atomic import (NFR-06) | PASS |
 | `tests/test_services.py` | 35 | Budget recommendations, nudges, savings, reports | PASS |
@@ -344,7 +344,7 @@ Final run on 2026-11-18, after every fix in §8, using full test discovery
 | `tests/test_insights.py` | 17 | Smart Suggestions rules | PASS |
 | `tests/test_end_to_end.py` | 9 | Statement → dashboard integration — incl. the NFR-02 and NFR-03 target tests | PASS |
 | `tests/test_imap.py` | 4 | Email receipt fetcher (network-free) | PASS |
-| **Total** | **239** | | **239 / 239 PASS** (exit 0, 0 skipped, 219 s) |
+| **Total** | **240** | | **240 / 240 PASS** (exit 0, 0 skipped, 226 s) |
 
 ### Live end-to-end functional run — PC and mobile
 
@@ -449,7 +449,7 @@ feature.
 
 | # | Found by | Defect | Analysis | Severity | Status |
 |---|----------|--------|----------|:--------:|--------|
-| D15 | Real-device session B (iPhone 13, iOS 27.2.1, Safari, mkcert HTTPS over Wi-Fi) | With the server stopped, the home-screen app did **not** show the "You are offline" page | The same fallback **passes** on Android/Chrome (session A), and the service worker was confirmed active in Edge 157, so the implementation works on Chromium. On iOS the fallback needs a service worker registered *inside the home-screen app*. Everything else that passed on the iPhone (install, camera, navigation) works without a service worker, so the symptom fits a worker that never registered there. Two candidate causes: **(1)** the mkcert root certificate was installed but not granted *full trust* (Settings → General → About → Certificate Trust Settings). Safari can still load the page after a certificate warning, but refuses service-worker registration on an untrusted certificate. **(2)** iOS runs home-screen apps in a container separate from Safari, so a worker registered in a Safari tab does not carry over; it must register inside the installed app while the server is running. | Minor (offline convenience only; every core feature works on iOS) | **Open.** Cause not yet confirmed. Next step: check the certificate trust setting, then re-test opening the installed app once while the server runs before stopping it |
+| D15 | Real-device session B (iPhone 13, iOS 27.2.1, Safari, mkcert HTTPS over Wi-Fi) | With the server stopped, the home-screen app did **not** show the "You are offline" page | The same fallback **passes** on Android/Chrome (session A), and the service worker was confirmed active in Edge 157, so the implementation works on Chromium. On iOS the fallback needs a service worker registered *inside the home-screen app*. Everything else that passed on the iPhone (install, camera, navigation) works without a service worker, so the symptom fits a worker that never registered there. Two candidate causes: **(1)** the mkcert root certificate was installed but not granted *full trust* (Settings → General → About → Certificate Trust Settings). Safari can still load the page after a certificate warning, but refuses service-worker registration on an untrusted certificate. **(2)** iOS runs home-screen apps in a container separate from Safari, so a worker registered in a Safari tab does not carry over; it must register inside the installed app while the server is running. | Minor (offline convenience only; every core feature works on iOS) | **Open.** Cause not yet confirmed. **Diagnostic added:** Settings → *Offline mode* now reports on the device itself whether offline mode is *Ready*, *Setting up* or *Not available*, with the browser's reason and whether the page is open in a browser tab or the installed app. That makes the iOS cause visible without a Mac. Next step: open Settings in the installed iPhone app with the server running, then check full trust if it reports *Not available* |
 
 ### UAT usability observations (not defects)
 

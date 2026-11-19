@@ -46,3 +46,6 @@ test_jinja.py
 
 # UAT questionnaire responses (participant data) - kept local, not published
 docs/uat_results.xlsx
+
+# TLS certificates and private keys (mkcert, for phone HTTPS) - never commit
+*.pem

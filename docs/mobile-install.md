@@ -52,12 +52,25 @@ No `adb` on iOS, and Wi-Fi access needs HTTPS the phone trusts. `mkcert` issues 
 locally-trusted certificate for this PC's LAN address.
 
 1. `winget install FiloSottile.mkcert` then `mkcert -install`
-2. `mkcert 192.168.x.x <this-pc-name>.local localhost`  (use your PC's LAN IP)
-3. Run bound to the network with that certificate:
+2. Create the certificate **outside the project folder**. The `-key.pem` file is a
+   private key; keeping it out of the repository means it can never be committed
+   (the repo is public) or read by tools that index the workspace. The commands
+   below also lock the folder to your Windows account:
 
 ```bat
-set SSL_CERT=192.168.x.x+2.pem
-set SSL_KEY=192.168.x.x+2-key.pem
+mkdir "%USERPROFILE%\.certs\expense-tracker"
+icacls "%USERPROFILE%\.certs\expense-tracker" /inheritance:r /grant:r "%USERDOMAIN%\%USERNAME%:(OI)(CI)F"
+cd /d "%USERPROFILE%\.certs\expense-tracker"
+mkcert 192.168.x.x <this-pc-name>.local localhost
+```
+
+   (Use your PC's LAN IP.) As a second safeguard, `*.pem` is in `.gitignore`.
+
+3. Back in the project folder, run bound to the network with that certificate:
+
+```bat
+set SSL_CERT=%USERPROFILE%\.certs\expense-tracker\192.168.x.x+2.pem
+set SSL_KEY=%USERPROFILE%\.certs\expense-tracker\192.168.x.x+2-key.pem
 venv\Scripts\python.exe run_uat_session.py --participant P01 --mobile
 ```
 
@@ -67,8 +80,15 @@ venv\Scripts\python.exe run_uat_session.py --participant P01 --mobile
 4. Copy mkcert's root CA (`mkcert -CAROOT` → `rootCA.pem`) to the phone and
    install it as a trusted certificate (Android: Settings → Security → Install a
    certificate → CA certificate; iOS: install the profile, then Settings →
-   General → About → Certificate Trust Settings → enable full trust).
+   General → About → Certificate Trust Settings → enable full trust). Copy only
+   `rootCA.pem`, never `rootCA-key.pem`: the CA key can mint certificates your
+   devices will trust, so it must stay on the PC.
 5. On the phone open `https://192.168.x.x:5000` and install the PWA.
+6. **Check offline mode** in the app under **Settings → Offline mode**. It should
+   read *Ready*. If it shows *Not available*, it explains why. On iPhone the usual
+   cause is step 4's full trust not being enabled. Also open the installed
+   home-screen app once while the server is running: iOS keeps the installed app
+   separate from Safari, so offline mode has to be set up inside it.
 
 > Binding to `0.0.0.0` exposes the server to your local network for the session;
 > keep it to a trusted network. The loopback/USB path above does not expose it.
