@@ -197,6 +197,57 @@ class AuthenticationTests(RouteTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Incorrect password', response.data)
 
+    def test_lockout_expires_after_the_lockout_period(self):
+        # The lockout must be temporary: once LOGIN_LOCKOUT_SECONDS pass, the
+        # correct password works again. Time is advanced by patching the
+        # monotonic clock the throttle reads, rather than really waiting.
+        from unittest import mock
+        import security
+        self.complete_setup()
+        self.client.post('/logout')
+        for _ in range(config.MAX_LOGIN_ATTEMPTS):
+            self.client.post('/login', data={'password': 'wrong-guess'})
+        locked = self.client.post('/login', data={'password': PASSWORD})
+        self.assertEqual(locked.status_code, 429)
+
+        later = security.time.monotonic() + config.LOGIN_LOCKOUT_SECONDS + 1
+        with mock.patch.object(security.time, 'monotonic', return_value=later):
+            response = self.client.post('/login', data={'password': PASSWORD},
+                                        follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertNotIn('/login', response.headers['Location'])
+
+    def _set_last_seen(self, minutes_ago):
+        """Back-date the session's last activity, as if the user went idle."""
+        from datetime import datetime, timedelta, timezone
+        with self.client.session_transaction() as sess:
+            sess['last_seen'] = (datetime.now(timezone.utc)
+                                 - timedelta(minutes=minutes_ago)).isoformat()
+
+    def test_idle_session_is_signed_out_after_the_timeout(self):
+        # Security promise shown on the login and Settings pages: signed out
+        # after SESSION_TIMEOUT_MINUTES of inactivity.
+        self.complete_setup()
+        self._set_last_seen(config.SESSION_TIMEOUT_MINUTES + 1)
+        response = self.client.get('/budget', follow_redirects=True)
+        self.assertIn(b'Signed out after', response.data)
+        self.assertIn(b'Unlock', response.data)  # back on the sign-in page
+        # The expired session is cleared, not just redirected once.
+        again = self.client.get('/budget', follow_redirects=False)
+        self.assertIn('/login', again.headers['Location'])
+
+    def test_active_session_survives_and_refreshes_its_idle_timer(self):
+        # Activity just inside the timeout keeps the user signed in, and each
+        # request restarts the idle clock (last_seen moves to "now").
+        from datetime import datetime, timezone
+        self.complete_setup()
+        self._set_last_seen(config.SESSION_TIMEOUT_MINUTES - 1)
+        response = self.client.get('/budget', follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        with self.client.session_transaction() as sess:
+            seen = datetime.fromisoformat(sess['last_seen'])
+        self.assertLess((datetime.now(timezone.utc) - seen).total_seconds(), 60)
+
     def test_assistant_escapes_user_controlled_names(self):
         # Category and goal names are user-entered and are interpolated into
         # the assistant's HTML answer, so they must arrive escaped (no XSS).
