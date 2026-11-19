@@ -175,35 +175,42 @@ correction.</p>
                     </td>
                 </tr>
                 {% if txn['transaction_id'] in items_by_txn %}
-                <tr class="receipt-row" style="background: #f9f9f9;">
+                {% set receipt_items = items_by_txn[txn['transaction_id']] %}
+                {% set items_total = receipt_items|sum(attribute='amount') %}
+                {% set difference = (txn['amount'] - items_total)|round(2) %}
+                <tr class="receipt-row">
                     <td colspan="7">
-                        <div style="padding: 10px 20px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <strong>🧾 Itemized Receipt:</strong>
-                                <form method="POST" action="{{ url_for('clear_receipt', transaction_id=txn['transaction_id']) }}" style="margin: 0;">
-<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                    <button type="submit" class="secondary small" style="background: transparent; border: 1px solid #ccc; color: #666;">Clear Receipt</button>
+                        <div class="receipt-panel">
+                            <div class="receipt-head">
+                                <span class="receipt-title">🧾 Receipt items</span>
+                                <form method="POST" action="{{ url_for('clear_receipt', transaction_id=txn['transaction_id']) }}" class="receipt-clear">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                    <button type="submit" class="secondary small" aria-label="Clear all receipt items for {{ txn['description'] }}">Clear</button>
                                 </form>
                             </div>
                             <ul class="receipt-items">
-                                {% for item in items_by_txn[txn['transaction_id']] %}
+                                {% for item in receipt_items %}
                                 <li>
-                                    <span>{{ item.quantity }}x {{ item.item_name }} - {{ item.amount|money }} ZMW</span>
-                                    <form method="POST" action="{{ url_for('delete_receipt_item', transaction_id=txn['transaction_id'], item_id=item.item_id) }}" class="inline-form">
+                                    <span class="receipt-item-name">{% if item.quantity > 1 %}<span class="receipt-qty">{{ item.quantity }} ×</span> {% endif %}{{ item.item_name }}</span>
+                                    <span class="receipt-item-amount">{{ item.amount|money }}</span>
+                                    <form method="POST" action="{{ url_for('delete_receipt_item', transaction_id=txn['transaction_id'], item_id=item.item_id) }}" class="receipt-item-delete">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                                         <button type="submit" class="link-button" id="delete-item-{{ item.item_id }}" title="Remove this line" aria-label="Remove {{ item.item_name }}">&times;</button>
                                     </form>
                                 </li>
                                 {% endfor %}
                             </ul>
-                            {% set items_total = items_by_txn[txn['transaction_id']]|sum(attribute='amount') %}
-                            {% set difference = (txn['amount'] - items_total)|round(2) %}
-                            <p class="small {% if difference != 0 %}receipt-mismatch{% else %}muted{% endif %}">
-                                Items total {{ items_total|money }} of {{ txn['amount']|money }} ZMW
-                                {% if difference > 0 %}({{ difference|money }} not itemised){% elif difference < 0 %}({{ (-difference)|money }} over the transaction){% endif %}
-                            </p>
+                            <div class="receipt-total">
+                                <span>Itemised</span>
+                                <span class="receipt-item-amount"><strong>{{ items_total|money }}</strong> of {{ txn['amount']|money }} {{ currency }}</span>
+                            </div>
+                            {% if difference > 0 %}
+                            <p class="receipt-note receipt-mismatch">{{ difference|money }} {{ currency }} not itemised yet. Add any missing items below.</p>
+                            {% elif difference < 0 %}
+                            <p class="receipt-note receipt-mismatch">Items come to {{ (-difference)|money }} {{ currency }} more than the transaction. Check for a mis-read line.</p>
+                            {% endif %}
                             <details class="manual-items">
-                                <summary class="small">Add a missing item</summary>
+                                <summary>Add a missing item</summary>
                                 {% with txn_id = txn['transaction_id'] %}{% include '_receipt_item_form.html' %}{% endwith %}
                             </details>
                         </div>

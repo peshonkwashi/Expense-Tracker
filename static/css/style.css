@@ -209,8 +209,25 @@ button.small, .button.small, select.small { padding: .28rem .55rem; font-size: .
 .category-form select { flex: 1 1 150px; width: auto; }
 
 /* --- Receipt items ------------------------------------------------------ */
-.receipt-items { margin: 5px 0 .4rem; padding-left: 1.2rem; }
-.receipt-items li { display: flex; align-items: center; gap: .4rem; }
+/* Receipt panel: heading + Clear on one line, then one row per item (name |
+   amount | remove), a total line, and an optional mismatch note. Amounts sit in
+   their own right-aligned column so they line up. */
+.receipt-panel { padding: .5rem .15rem .15rem; max-width: 36rem; text-align: left; }
+.receipt-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .3rem; }
+.receipt-title { font-weight: 700; font-size: .92rem; white-space: nowrap; }
+.receipt-clear, .receipt-item-delete { margin: 0; }
+.receipt-items { list-style: none; margin: 0; padding: 0; }
+.receipt-items li {
+    display: grid; grid-template-columns: 1fr auto auto; align-items: center;
+    gap: .6rem; padding: .3rem 0; border-bottom: 1px dashed var(--line);
+    font-size: .88rem; text-align: left;
+}
+.receipt-item-name { min-width: 0; overflow-wrap: anywhere; }
+.receipt-qty { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.receipt-item-amount { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+.receipt-total { display: flex; justify-content: space-between; gap: .75rem; padding: .45rem 0 .15rem; font-size: .88rem; }
+.receipt-note { margin: .15rem 0 .35rem; font-size: .82rem; }
+tr.receipt-row > td { background: #fafcfe; }
 .link-button {
     background: none; border: 0; padding: 0 .3rem; color: var(--ink-soft);
     font-size: 1.05rem; line-height: 1; cursor: pointer;
@@ -312,6 +329,29 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
     table.data-table tfoot th::before { content: attr(data-label); font-weight: 600; color: var(--ink-soft); margin-right: auto; text-align: left; }
     table.data-table tfoot th.foot-title { justify-content: flex-start; font-weight: 700; text-align: left; }
     table.data-table tfoot th.foot-title::before { content: none; }
+
+    /* Receipt row: one wide cell holding the receipt panel, not label/value
+       pairs, so undo the right-aligned card-cell layout used for data cells. */
+    table.data-table tr.receipt-row td {
+        display: block; text-align: left; padding: .2rem .5rem .5rem; border-bottom: none;
+    }
+    table.data-table tr.receipt-row td::before { content: none; }
+    /* Join the receipt panel to its transaction so the two read as one card
+       (browsers without :has() simply show them as two adjacent cards). */
+    table.data-table tr:has(+ tr.receipt-row) {
+        margin-bottom: 0; border-bottom: none;
+        border-bottom-left-radius: 0; border-bottom-right-radius: 0;
+    }
+    table.data-table tr.receipt-row {
+        border-top: 1px dashed var(--line); background: #fafcfe;
+        border-top-left-radius: 0; border-top-right-radius: 0;
+    }
+    .receipt-panel { max-width: none; }
+    /* The x keeps a full 44px touch target while staying visually small. */
+    .receipt-items .link-button {
+        min-width: 44px; min-height: 44px;
+        display: inline-flex; align-items: center; justify-content: center;
+    }
     table.data-table tfoot th:empty { display: none; }
 }
 
