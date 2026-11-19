@@ -22,6 +22,7 @@ Two passes share one mailbox session:
 """
 import hashlib
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -60,24 +61,30 @@ def _scan_text(text):
 
 
 def _read_message(msg, scan_file):
-    """Read one email as a receipt: (ReceiptScan or None, the text it was read from)."""
-    for text in imap_fetcher.body_texts(msg):
+    """Read one email as a receipt: (ReceiptScan or None, the email's text).
+
+    The text is returned even when no items were read, so the caller can still
+    tell, for example, that the email announces a free trial.
+    """
+    texts = imap_fetcher.body_texts(msg)
+    for text in texts:
         scan = _scan_text(text)
         if scan:
             return scan, text
+    body = '\n'.join(texts)
     path = imap_fetcher.save_attachment(msg)
     if not path:
-        return None, ''
+        return None, body
     try:
         scan = scan_file(path)
     except ReceiptScanError:
-        return None, ''
+        return None, body
     finally:
         try:
             os.remove(path)
         except OSError:
             pass
-    return (scan, '') if scan and scan.items else (None, '')
+    return (scan, body) if scan and scan.items else (None, body)
 
 
 def scan_message(msg, scan_file):
@@ -185,6 +192,13 @@ class SweepResult:
     receipts: list = field(default_factory=list)
     foreign_currency: list = field(default_factory=list)
     unreadable: list = field(default_factory=list)
+    free_trials: list = field(default_factory=list)
+
+
+# A trial or a K0.00 sign-up is not spending: it is reported, not stored, so it
+# can't skew the budget or the forecasts. The first real charge arrives as an
+# ordinary receipt and is picked up then.
+_FREE_TRIAL = re.compile(r'\b(free\s+trial|trial)\b', re.IGNORECASE)
 
 
 def merchant_of(msg):
@@ -219,15 +233,15 @@ def read_new_receipts(mail, scan_file, skip_keys=(), days_back=30, converter=Non
         if not keyword:
             continue
         scan, text = _read_message(msg, scan_file)
-        if not scan:
-            result.unreadable.append(merchant)
-            continue
-        priced = price_in_local(scan, text, converter)
-        if priced is None:
-            result.foreign_currency.append(merchant)
-            continue
-        if priced.amount <= 0:
-            result.unreadable.append(merchant)
+        priced = price_in_local(scan, text, converter) if scan else None
+        if not (priced and priced.amount > 0):
+            subject = imap_fetcher.sender_and_subject(msg)[2]
+            if _FREE_TRIAL.search(f'{subject}\n{text}'):
+                result.free_trials.append(merchant)
+            elif scan and priced is None:
+                result.foreign_currency.append(merchant)
+            else:
+                result.unreadable.append(merchant)
             continue
         result.receipts.append(NewReceipt(
             key, imap_fetcher.message_date(msg), merchant, priced.amount,

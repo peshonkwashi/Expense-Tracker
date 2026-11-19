@@ -232,21 +232,43 @@ def fetch_receipt_attachment(mail, merchant_keyword, days_back=7):
 
 
 # Subject words that mark an email as a receipt rather than marketing.
-RECEIPT_SUBJECT_WORDS = ('receipt', 'order', 'trip', 'invoice', 'payment')
+# IMAP SUBJECT matches substrings, so 'purchase' also finds 'purchased'.
+RECEIPT_SUBJECT_WORDS = ('receipt', 'order', 'trip', 'invoice', 'payment',
+                         'purchase', 'billing', 'subscription', 'trial')
+
+
+def is_gmail(mail):
+    """True for a Gmail mailbox, which supports Gmail's own search syntax."""
+    return 'X-GM-EXT-1' in (getattr(mail, 'capabilities', None) or ())
+
+
+def _search_ids(mail, *criteria):
+    status, found = mail.search(None, *criteria)
+    if status != 'OK' or not found or not found[0]:
+        return set()
+    return set(found[0].split())
 
 
 def find_recent_receipt_messages(mail, days_back=30, limit=40):
-    """Receipt-like emails (by subject) from the last `days_back` days, newest first."""
+    """Receipt-like emails from the last `days_back` days, newest first.
+
+    Every provider is searched by subject. On Gmail, the Purchases tab
+    (category:purchases) is searched too: Gmail files receipts, trials and
+    order confirmations there even when the subject says none of our words,
+    e.g. "Welcome to Canva Pro".
+    """
     since = date.today() - timedelta(days=days_back)
     words = RECEIPT_SUBJECT_WORDS
     # IMAP's OR takes exactly two keys, so n alternatives need n-1 ORs in front.
     subject_any = 'OR ' * (len(words) - 1) + ' '.join(f'SUBJECT "{w}"' for w in words)
     mail.select('INBOX', readonly=True)
-    status, found = mail.search(None, f'(SINCE "{_imap_date(since)}" {subject_any})')
-    if status != 'OK' or not found or not found[0]:
-        return []
+    ids = _search_ids(mail, f'(SINCE "{_imap_date(since)}" {subject_any})')
+    if is_gmail(mail):
+        ids |= _search_ids(mail, 'X-GM-RAW',
+                           f'"category:purchases newer_than:{int(days_back)}d"')
     messages = []
-    for email_id in reversed(found[0].split()[-limit:]):
+    # Message sequence numbers rise with arrival, so the largest are newest.
+    for email_id in sorted(ids, key=int, reverse=True)[:limit]:
         msg = _fetch_message(mail, email_id)
         if msg is not None:
             messages.append(msg)

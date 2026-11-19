@@ -265,6 +265,55 @@ class InboxSweepTests(unittest.TestCase):
         self.assertEqual(result.status, email_receipts.MATCHED)
 
 
+    def test_gmail_also_searches_the_purchases_tab(self):
+        canva = _html_receipt(CANVA_TRIAL_HTML, sender='Canva <no-reply@canva.com>',
+                              message_id='<trial@canva.com>')
+        gmail = PurchasesIMAP(subject_hits=[], purchases_hits=[canva])
+        result = email_receipts.read_new_receipts(gmail, _no_ocr)
+        self.assertIn(('X-GM-RAW', '"category:purchases newer_than:30d"'),
+                      gmail.searches)
+        self.assertEqual(result.free_trials, ['Canva'])
+
+    def test_other_providers_are_not_sent_gmail_search_syntax(self):
+        mail = PurchasesIMAP(subject_hits=[], purchases_hits=[], gmail=False)
+        email_receipts.read_new_receipts(mail, _no_ocr)
+        self.assertFalse(any('X-GM-RAW' in c for c in mail.searches))
+
+    def test_a_free_trial_is_reported_not_stored(self):
+        canva = _html_receipt(CANVA_TRIAL_HTML, sender='Canva <no-reply@canva.com>')
+        result = email_receipts.read_new_receipts(MultiIMAP([canva]), _no_ocr)
+        self.assertEqual(result.receipts, [])
+        self.assertEqual(result.free_trials, ['Canva'])
+        self.assertEqual(result.unreadable, [])
+
+
+CANVA_TRIAL_HTML = """<html><body><h1>Welcome to Canva Pro</h1>
+<p>Your 30-day free trial has started. You won't be charged until 19 Dec 2026.</p>
+<table><tr><td>Canva Pro (monthly)</td><td>K 0.00</td></tr>
+<tr><td>Total today</td><td>K 0.00</td></tr></table></body></html>"""
+
+
+class PurchasesIMAP(FakeIMAP):
+    """A mailbox where the subject search and Gmail's Purchases search differ."""
+
+    def __init__(self, subject_hits, purchases_hits, gmail=True):
+        super().__init__(None)
+        self.raws = subject_hits + purchases_hits
+        self.subject_ids = [str(i + 1).encode() for i in range(len(subject_hits))]
+        self.purchase_ids = [str(len(subject_hits) + i + 1).encode()
+                             for i in range(len(purchases_hits))]
+        self.capabilities = ('IMAP4REV1', 'X-GM-EXT-1') if gmail else ('IMAP4REV1',)
+        self.searches = []
+
+    def search(self, charset, *criteria):
+        self.searches.append(criteria)
+        ids = self.purchase_ids if criteria[0] == 'X-GM-RAW' else self.subject_ids
+        return ('OK', [b' '.join(ids)])
+
+    def fetch(self, email_id, parts):
+        return ('OK', [(b'x', self.raws[int(email_id) - 1])])
+
+
 class _SettingsConn:
     """Just enough of a connection for database.get/set_setting."""
 

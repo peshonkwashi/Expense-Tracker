@@ -1402,6 +1402,11 @@ def auto_fetch_receipts():
                      "rates were used)" if converter.stale else "")
             flash(note + ". These amounts are estimates: uploading your bank "
                   "statement replaces them with what the bank charged.", 'info')
+        if sweep.free_trials:
+            flash(f"Found free-trial sign-up(s), not added because nothing was "
+                  f"charged yet: {', '.join(sorted(set(sweep.free_trials)))}. "
+                  "The first charge will be picked up when its receipt arrives.",
+                  'info')
         if sweep.foreign_currency:
             flash(f"Couldn't convert receipt(s) priced in another currency, "
                   f"because no exchange rate was available: "
@@ -1409,7 +1414,7 @@ def auto_fetch_receipts():
                   f"online, or they will appear when your bank statement is "
                   f"uploaded.", 'warning')
         if not (itemised or review or ambiguous or unreadable or stored['added']
-                or sweep.foreign_currency):
+                or sweep.foreign_currency or sweep.free_trials):
             flash('No new receipt emails were found in the last 30 days.', 'info')
     finally:
         conn.close()

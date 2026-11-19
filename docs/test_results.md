@@ -27,7 +27,7 @@ A layered testing strategy was adopted, matching the system's five-layer
 architecture so that each layer could be verified independently. Four
 complementary types of testing were applied:
 
-- **Automated testing** — a suite of 240 unit, integration and end-to-end tests
+- **Automated testing** — a suite of 288 unit, integration and end-to-end tests
   exercising the data, machine-learning, service and presentation layers,
   providing repeatable regression evidence.
 - **Machine-learning verification** — quantitative measurement of the two learning
@@ -331,93 +331,178 @@ run):
 
 ## 7. Automated regression suite
 
-Final run on 2026-11-18, after every fix in §8, using full test discovery
-(`python -m unittest discover -s tests -t .`) in the project virtual-env.
+Final run on 2026-11-19, after every fix in §8 and the post-UAT features in
+§7.1, using full test discovery (`python -m unittest discover -s tests -t .`)
+in the project virtual-env. (The previous run, on 2026-11-18 before those
+features, was 240 / 240.)
 
 | Suite | Tests | Covers | Result |
 |-------|:-----:|--------|:------:|
-| `tests/test_routes.py` | 68 | Pages, auth, security controls, PWA, demo features. Includes `test_nfr01_core_pages_render_within_three_seconds`, the 6 security regression tests (D6–D9), 3 timer tests (lockout expiry, idle sign-out after 10 minutes, the idle timer refreshing on activity), and the offline-mode indicator (D15 diagnostic) | PASS |
+| `tests/test_routes.py` | 93 | Pages, auth, security controls, PWA, demo features. Includes `test_nfr01_core_pages_render_within_three_seconds`, the 6 security regression tests (D6–D9), 3 timer tests (lockout expiry, idle sign-out after 10 minutes, the idle timer refreshing on activity), the offline-mode indicator (D15 diagnostic), and the post-UAT features (§7.1): password reset and change, profile editing, email-receipt import and statement merging, and the theme setting, with regression tests for D16–D20 | PASS |
 | `tests/test_ml.py` | 43 | Categoriser training/evaluation, forecasting, subscriptions | PASS |
-| `tests/test_ingestion.py` | 41 | CSV parsing, validation, deduplication, atomic import (NFR-06) | PASS |
+| `tests/test_ingestion.py` | 42 | CSV parsing, validation, deduplication, atomic import (NFR-06), salary detection across a promotion | PASS |
 | `tests/test_services.py` | 35 | Budget recommendations, nudges, savings, reports | PASS |
 | `tests/test_ocr.py` | 23 | Receipt OCR (real Tesseract, images and PDFs) | PASS |
 | `tests/test_insights.py` | 17 | Smart Suggestions rules | PASS |
 | `tests/test_end_to_end.py` | 9 | Statement → dashboard integration — incl. the NFR-02 and NFR-03 target tests | PASS |
-| `tests/test_imap.py` | 4 | Email receipt fetcher (network-free) | PASS |
-| **Total** | **240** | | **240 / 240 PASS** (exit 0, 0 skipped, 226 s) |
+| `tests/test_imap.py` | 26 | Email receipts, network-free: read-only mailbox access, body and attachment parsing, receipt-to-transaction matching, inbox sweep (including the Gmail Purchases tab), free-trial detection, currency detection and conversion | PASS |
+| **Total** | **288** | | **288 / 288 PASS** (exit 0, 0 skipped, 271 s) |
 
-### Live end-to-end functional run — PC and mobile
+### Live end-to-end functional run — PC, mobile and spec-only build
 
-To confirm that the fixes and the removal of the redundant `run_uat.bat` launcher
-left the whole application working, two real servers were launched through the
-UAT launcher, each with its own fresh isolated database:
+Re-run on 2026-11-19 against the final build, including the §7.1 features.
+Three real servers were launched through the UAT launcher, each with its own
+fresh isolated database:
 
-- **PC session:** `run_uat_session.py --participant SMOKE-PC --port 5000`
-- **Mobile session:** `run_uat_session.py --participant SMOKE-MOB --port 5001 --usb`.
+- **PC:** `run_uat_session.py --participant SMOKE-PC --port 5000 --reset`
+- **Mobile:** `run_uat_session.py --participant SMOKE-MOB --port 5001 --usb --reset`.
   The USB bridge reported no phone attached, as expected; the server stayed bound
   to `127.0.0.1` per NFR-05.
+- **Spec-only (graded build):** `run_uat_session.py --participant SMOKE-SPEC
+  --port 5002 --spec-only --reset` (`DEMO_FEATURES=0`), the build an examiner
+  grades against FR-01 to FR-12.
 
-A scripted user journey of 38 steps was then driven over real HTTP, using CSRF
-tokens, session cookies and a genuine multipart CSV upload, with a desktop and a
-mobile (Android Chrome) user-agent respectively. The steps covered first-launch
-setup, statement import, every core page, category correction with retrain,
-manual receipt items, savings goals, custom categories, model retrain, database
-backup, CSV export, the monthly report, the assistant and both sync mocks, all PWA
-assets and the service-worker headers, POST-only sign-out, the session gate, the
-offline page, and the open-redirect guard.
+A scripted user journey was driven over real HTTP, using CSRF tokens, session
+cookies and a genuine multipart CSV upload, with a desktop and a mobile (Android
+Chrome) user-agent. It covered:
+
+- **Core journey:** first-launch setup, statement import, every core page,
+  category correction with retrain, manual receipt items, savings goals, custom
+  categories, model retrain, database backup, CSV export and the monthly report.
+- **PWA and security:** all PWA assets and the service-worker headers (v5
+  cache), POST-only sign-out, the session gate, the offline page and the
+  open-redirect guard.
+- **Post-UAT features (§7.1):**
+  - the new card layouts and the theme controls;
+  - a profile change refused without the current password (D19), then saved
+    with it (a raise and a new pay day);
+  - a second device signed in, then signed out by a password change while this
+    device stayed signed in (D17);
+  - a password reset refused with the pre-raise details and accepted with the
+    current ones;
+  - sign-in with the reset password.
+- **Full build only:** the assistant, both sync mocks, the Email receipts card,
+  and an email scan with no credentials, which must stop before connecting to
+  anything.
+- **Spec-only build only:** every demo extension must be absent (below).
 
 | Session | Port | User-agent | Result |
 |---------|:----:|------------|:------:|
-| PC | 5000 | Desktop Chrome | **38 / 38 PASS** (22.1 s) |
-| Mobile | 5001 | Android Chrome | **38 / 38 PASS** (22.2 s) |
+| PC | 5000 | Desktop Chrome | **53 / 53 PASS** |
+| Mobile | 5001 | Android Chrome | **53 / 53 PASS** |
+| Spec-only | 5002 | Desktop Chrome | **55 / 55 PASS** |
 
-A follow-up browser pass rendered all 7 pages with no horizontal overflow at
-desktop width (port 5000) and at 375 px (port 5001), with every touch target at
-least 44 px on mobile.
+The journeys took 30–37 s each while the NFR-05 connection monitor was sampling
+the same processes (18–24 s without it). An earlier, unmonitored run of the same
+journeys on the same build also passed in full; it was repeated because the
+monitor had failed to start (a parameter error) and so recorded nothing.
 
-### Specification-only build (graded build)
-
-The same journey was run against the build an examiner grades against FR-01 to
-FR-12: `run_uat_session.py --participant SMOKE-SPEC --port 5002 --spec-only`
-(`DEMO_FEATURES=0`), on 2026-11-18. In place of the demo steps, the run asserted
-that every demo extension is completely absent:
+In the spec-only build the demo steps are replaced by checks that every demo
+extension is completely absent:
 
 | Check | Result |
 |-------|:------:|
-| Core journey (setup → import → all core pages → correction → receipt items → goals → categories → retrain → backup → export → report → PWA assets → security behaviour) | PASS |
-| Assistant card, Household nav, bank/MoMo sync cards and email auto-fetcher card hidden | PASS |
+| Core journey and the post-UAT features (profile, password change, reset, layout, theme), which are part of the graded build | PASS |
+| Assistant card, Household nav, bank/MoMo sync cards and Email receipts card hidden | PASS |
 | Demo routes return **404**: `/household`, `/ask-assistant`, `/sync-bank`, `/sync-momo`, `/auto-fetch-receipts` | PASS (5/5) |
-| **Total** | **42 / 42 PASS** (17.4 s) |
+| **Total** | **55 / 55 PASS** |
+
+The 2026-11-18 runs before the §7.1 features (38/38 on PC and mobile, 42/42
+spec-only) also passed. The browser layout pass from that day (all pages at
+desktop width and at 375 px, with no horizontal overflow and 44 px touch
+targets) was not repeated in full. The pages changed in §7.1 (Budget,
+Transactions, Settings, sign-in and reset) were checked at 375 px and at
+desktop width when they were built.
+
+### 7.1 Features added after the UAT (2026-11-19)
+
+Four features were added after the UAT sessions, partly in response to the
+security theme in the survey responses. Each was reviewed before release; the
+review found five defects, which were fixed before the features were committed
+(D16–D20, §8).
+
+| Feature | What was tested | Tests | Result |
+|---------|-----------------|:-----:|:------:|
+| **Offline password reset** (`/reset-password`, plus `reset_password.py` on the host machine) | A reset succeeds only with the matching name, salary and pay day; wrong details are rejected and count towards the sign-in lockout; a name with accented characters is a mismatch, not a crash (D16); a reset signs out every device already signed in (D17); the details checked are the current ones after a profile edit | 5 | PASS |
+| **Change password** (Settings) | Needs the current password; wrong guesses count towards the lockout (D18); the new password must differ from the old one; other devices are signed out while this one stays signed in (D17); *Show password* toggle present on every password form | 5 | PASS |
+| **Profile & income editing** (Settings, for raises and new pay dates) | Name, salary and pay day update and the budget is recalculated; invalid and implausibly large values are rejected; saving needs the current password, because these details are the reset key (D19); saving unchanged details does nothing; paychecks before a raise stay flagged as salary | 1 + 5 | PASS |
+| **Email receipt import** (demo extension) | Mailbox opened read-only and never modified; app password used for one scan and never stored; items read from the email body or, failing that, an attachment by OCR (D20); a receipt matched to its transaction by merchant, date (±3 days) and amount, with an ambiguous match adding nothing; a receipt with no matching transaction added as a new one; rescanning never duplicates it; a later statement upload **merges** the bank row into it rather than adding the purchase twice, keeping the items; a different amount is not merged; foreign-currency receipts converted with cached daily rates and matched within 5 %; free-trial sign-ups (nothing charged) reported but not added; on Gmail the Purchases tab is searched as well as subjects | 26 + 11 | PASS |
+| **Appearance** (light / dark / system theme) | The theme controls render in Settings | 1 | PASS |
+
+*Tests* counts the unit tests in `test_imap.py` / `test_ingestion.py` plus the
+route tests in `test_routes.py` (written as unit + route where both apply).
+
+The mobile card layout of the Budget and Transactions tables was also revised
+(card heading, uniform rows, full-width correction controls). It was checked in
+the browser at 375 px and at desktop width; the desktop table is unchanged.
+
+**Limitations recorded for Chapter 9.**
+
+1. The statement merge matches on amount and date, not merchant name, because
+   bank descriptions are often too cryptic to compare. Two different purchases
+   of exactly the same amount within three days could be merged into one.
+2. Salary detection keeps earlier paychecks flagged after a raise only if they
+   were imported before it. A user who sets up with a new salary and then
+   uploads older statements will see the older, lower paychecks unflagged. A
+   dated salary history would remove this, and the related case of a mistyped
+   salary leaving a wrong flag behind.
+3. The email import is tested against simulated mailboxes. A live run against
+   a real inbox was carried out informally by the developer and is not recorded
+   as evidence.
 
 ### NFR-05 — nothing transmitted off the device
 
-NFR-05 requires that no data leaves the user's machine. It was verified on
-2026-11-18 at three independent layers while the full-demo and spec-only servers
-ran their functional journeys:
+NFR-05 requires that no data leaves the user's machine. It was re-verified on
+2026-11-19 against the final build, at three independent layers, while the PC,
+mobile and spec-only servers ran the journeys above:
 
 | Layer | Method | Result |
 |-------|--------|--------|
-| **Server process** | A monitor sampled every TCP connection owned by both server processes throughout both runs (136 samples over 75 s, about one every 0.55 s) and flagged any remote address that was not loopback | **0 external connections** among 24 observed (all loopback test traffic) |
-| **Browser** | All 7 pages loaded and every resource request recorded (Resource Timing API) | **35 / 35 requests to `127.0.0.1`**; no third-party hosts |
-| **Source** | Scan of every template, the application scripts, the stylesheet, the manifest and the service worker for external URLs; scan of all Python modules for network libraries | **No external URLs.** The only network client is `services/imap_fetcher.py` |
+| **Server process** | A monitor sampled every TCP connection owned by the three servers and their launcher processes (six processes) for 240 s, covering all three journeys: 338 samples, about one every 0.7 s. It flagged any remote address that was not loopback | **0 external connections** among 39 observed (all loopback test traffic) |
+| **Browser** | Signed in on the PC server; all 8 pages (the 7 app pages plus the reset page) loaded in the browser and every request recorded (Resource Timing API) | **40 / 40 requests to `127.0.0.1`**; no third-party hosts |
+| **Source** | Scan of every template, the application scripts, the stylesheet, the manifest and the service worker for external URLs; scan of all Python modules for network libraries | **No external URLs.** The only network clients are `services/imap_fetcher.py` and `services/fx.py`, the two documented exceptions below. `app.py` imports `imaplib` and `socket` only inside the email-scan route, to recognise their errors. The UAT launcher's `socket` use finds the machine's LAN address for the phone URL; a UDP `connect` sends no packet |
 
-**Documented exception.** The email receipt auto-fetcher (`imap_fetcher.py`)
-contacts the user's own mail server over IMAP/TLS. It is a demo extension, is
-removed entirely from the spec-only build (route returns 404 above), and does
-nothing unless the user supplies `IMAP_EMAIL` and `IMAP_PASSWORD` themselves, so
-it is an explicit, opt-in departure from NFR-05 rather than a silent one.
+The journeys included an email scan started with no credentials. It stopped
+with "not set up" before opening any connection, and the monitor confirms that
+nothing left the machine.
+
+The 2026-11-18 measurement, made before the §7.1 features, gave the same
+result: 0 external connections in 136 samples over 75 s, and 35 / 35 browser
+requests local.
+
+**Documented exceptions.** Two connections leave the machine. Both belong to
+the email-receipt demo extension (§7.1), and both happen only while a scan the
+user started is running:
+
+1. `services/imap_fetcher.py` signs in to the user's own mail server over
+   IMAP/TLS and reads receipt emails. The mailbox is opened read-only, the app
+   password is typed for that scan and never stored, and only the email address
+   is remembered.
+2. `services/fx.py` fetches exchange rates from `open.er-api.com`, at most once
+   a day and only when a foreign-currency receipt is found. The request carries
+   only the base currency code, and the rates are cached so later scans work
+   offline.
+
+Both are removed from the spec-only build (the route returns 404, confirmed
+live above and by the automated `DemoFeatureFlagTests`), and Settings tells the
+user that this is the one feature that goes online. They are explicit, opt-in
+departures from NFR-05 rather than silent ones. A real scan was not part of the
+monitored run, so the monitor result covers everything except these two
+exceptions.
 
 *Limitations of the method.* Connection sampling cannot rule out a connection
 shorter than the sampling interval, and DNS lookups made by the operating system
 resolver are not attributed to the process. The source scan covers both gaps by
-showing that no code path besides the opt-in fetcher opens a network connection.
+showing that no code path besides the opt-in email-receipt scan opens a network
+connection.
 
 ---
 
 ## 8. Defects and observations
 
-Defects came from three sources: performance measurement (§4), a structured code
-and mobile review carried out after the UAT, and the UAT itself. Every defect in
+Defects came from four sources: performance measurement (§4), a structured code
+and mobile review carried out after the UAT, the review of the features added
+after the UAT (§7.1), and the UAT itself. Every defect in
 the first table was **found, fixed and re-verified**, each with a regression test
 or a recorded browser/HTTP check. The second table holds the UAT usability
 observations, which were investigated and found *not* to be functional defects.
@@ -439,6 +524,11 @@ presentation only.
 | D11 | Mobile review | **Settings page did not fit a phone** (rendered ~750 px wide at a 375 px viewport) | The global `td.num { white-space: nowrap }` rule applied to prose values, and the add-category form was a non-wrapping row | Minor (layout, NFR-08) | Wrapping label/value table class; wrapping add-category form | Layout probe: 375 px, no horizontal scroll on all 7 pages |
 | D12 | Mobile review | Every page's first paint **waited on a CDN** (Chart.js), and charts needed internet access | Chart.js was loaded render-blocking from jsDelivr in `<head>` | Minor (performance / offline, NFR-05) | Chart.js self-hosted, deferred and pre-cached by the service worker | 0 CDN requests; library loads locally in ~23 ms; charts draw |
 | D13 | Mobile review | Mobile usability gaps: table totals misaligned, half the menu hidden off-screen with no cue, touch targets below 44 px, receipt scan could not open the camera | Responsive CSS omitted `tfoot`; the nav hid its scrollbar; `.small` controls sized for desktop; no `capture` attribute | Cosmetic | `tfoot` stacked as cards; edge-fade + chevron on the nav; 44 px targets; `capture="environment"` with auto-submit | Measured at 375 px: all targets 44 px; chevron clears at scroll end |
+| D16 | Review of the password reset (§7.1) | Resetting with a name containing an accent or a curly apostrophe returned **HTTP 500** | `secrets.compare_digest` only accepts ASCII strings and raised `TypeError` | Minor (functional) | Names compared as UTF-8 bytes | Regression test (accented name → "do not match", HTTP 200) |
+| D17 | Review of the password features (§7.1) | **Changing or resetting the password left other devices signed in**, e.g. a phone already unlocked stayed unlocked | Sessions are signed cookies, and nothing tied them to the password in force | Minor (security) | Every password change starts a new session generation; a session from an older one is signed out on its next request. The device that made the change stays signed in | 2 regression tests (a second client is signed out after a change and after a reset) |
+| D18 | Review of change password (§7.1) | **Unlimited guesses at the current password** from a signed-in device | The change-password form checked the password without the sign-in throttle | Minor (security) | Wrong guesses count towards the same 5-try lockout as sign-in | Regression test (locked out after 5; password unchanged) |
+| D19 | Review of profile editing (§7.1) | **Password protection could be bypassed**: anyone at an unlocked device could set the name, salary and pay day to known values, sign out and reset the password | Those three details are the reset key, but editing them did not require the password | Major (security) | Saving profile changes requires the current password and shares the lockout | Regression test (blank or wrong password → profile unchanged) |
+| D20 | Review of the email-receipt fetcher (§7.1) | The fetcher **rarely found a receipt**: it read attachments only, searched relative to *today* rather than the purchase date, and needed credentials set as environment variables | Most e-receipts (ride-hailing, food delivery, online shops) carry the items in the email body, with no attachment | Major (demo feature) | Email body (HTML or text) parsed first, attachment OCR as fallback; search window centred on each transaction date; matching by amount; credentials entered in Settings | 23 network-free unit tests; developer test against a live mailbox (informal) |
 
 ¹ The assistant is a demo extension in a single-user, locally hosted app, so in
 practice this is self-XSS. It is graded Major because it would be exploitable as
@@ -476,12 +566,13 @@ behaviour.
 | NFR-02 Categorisation | Macro-F1 ≥ 0.85 | 0.994 (lowest category 0.933) | **PASS** |
 | NFR-03 Forecasting | Monthly MAE ≤ 15 % | 1.13 % and 7.04 % on two datasets | **PASS** |
 | NFR-04 Usability | First-time upload → dashboard ≤ 5 min | First-time user, unassisted: **1 min 39 s** on an iPhone 13 (33 % of allowance); expert baseline 1 min 6 s on a Galaxy S25+ (§5.1) | **PASS** |
-| NFR-05 Security / local-only | Nothing transmitted off-device | 0 external connections (process monitor); 35/35 browser requests local; no external URLs in source; opt-in IMAP fetcher is the documented exception | **PASS** |
+| NFR-05 Security / local-only | Nothing transmitted off-device | 0 external connections over 338 samples while all three journeys ran (process monitor, 2026-11-19); 40/40 browser requests local; no external URLs in source; the opt-in email-receipt scan (mailbox + exchange rates, demo build only) is the documented exception (§7) | **PASS** |
 | NFR-08 Compatibility | Chrome/Edge, desktop + mobile | Chrome 152 desktop + 375 px; Edge 157 (service worker confirmed); Samsung Galaxy S25+ (Android 17, Chrome), installed as a PWA; iPhone 13 (iOS 27.2.1, Safari) — all tested features except the offline page (D15, open) (§5.1); Firefox out of scope by decision (§6) | **PASS** (D15 open on iOS) |
 
-Nine defects (D5–D13, §8) were found and resolved: one requirement breach
-(NFR-01), four security issues, one broken documented install path, and three
-mobile layout/usability issues. Each was re-verified after its fix. One defect
+Fourteen defects (D5–D13 and D16–D20, §8) were found and resolved: one
+requirement breach (NFR-01), seven security issues, one broken documented
+install path, three mobile layout/usability issues, one crash (D16) and one
+demo feature that rarely worked (D20). Each was re-verified after its fix. One defect
 remains **open**: the offline fallback on iOS (D15, Minor). Its two likely causes
 are documented with a next step in §8.
 
