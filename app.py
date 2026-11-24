@@ -634,6 +634,7 @@ def transactions():
                                selected_category=selected_category,
                                selected_month=selected_month,
                                search_query=search_query,
+                               last_cash=session.pop('last_cash', None),
                                metric=metric, target_f1=config.TARGET_F1,
                                items_by_txn=items_by_txn,
                                page=page, total_pages=total_pages,
@@ -796,11 +797,60 @@ def add_transaction():
         # Settings) learns from it.
         forecasting.reset_forecast_cache()
 
-        flash(f'Added {txn_type.lower()} "{description}" '
-              f'({amount:,.2f} {config.CURRENCY}) under {assigned_name}.', 'success')
-        return redirect(url_for('transactions'))
+        # Shown inside the cash card, which the redirect scrolls back to, so
+        # several purchases can be logged one after another.
+        session['last_cash'] = (f'Added {txn_type.lower()} "{description}" '
+                                f'({amount:,.2f} {config.CURRENCY}) under {assigned_name}.')
+        return redirect(url_for('transactions', _anchor='add-transaction'))
     finally:
         conn.close()
+
+
+@app.route('/transactions/<int:transaction_id>/delete', methods=('POST',))
+@security.login_required
+def delete_transaction(transaction_id):
+    """Delete a cash transaction the user added by hand (and its receipt items).
+
+    Only manual entries can be deleted. A row from a statement, a sync or an
+    email receipt would simply come back on the next import, so those are
+    corrected (recategorised) rather than deleted.
+    """
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        txn = conn.execute(
+            'SELECT transaction_id, description, amount, import_hash '
+            'FROM Transaction_Record WHERE transaction_id = ? AND user_id = ?',
+            (transaction_id, user['user_id'])).fetchone()
+        if txn is None:
+            abort(404)
+        if not (txn['import_hash'] or '').startswith('manual-'):
+            flash('Only cash transactions you added yourself can be deleted. '
+                  'Correct the category of an imported one instead.', 'error')
+            return redirect(url_for('transactions'))
+        conn.execute('DELETE FROM Receipt_Item WHERE transaction_id = ?', (transaction_id,))
+        conn.execute('DELETE FROM Transaction_Record WHERE transaction_id = ?',
+                     (transaction_id,))
+        conn.commit()
+        forecasting.reset_forecast_cache()
+        flash(f'Deleted "{txn["description"]}" ({float(txn["amount"]):,.2f} '
+              f'{config.CURRENCY}).', 'success')
+        # Back to the same filtered/paged list, if it was this site's.
+        back = security.safe_next(_same_site_path(request.referrer))
+        return redirect(back or url_for('transactions'))
+    finally:
+        conn.close()
+
+
+def _same_site_path(url):
+    """Path + query of a same-host URL (for returning to a filtered list)."""
+    from urllib.parse import urlsplit
+    if not url:
+        return None
+    parts = urlsplit(url)
+    if parts.netloc and parts.netloc != request.host:
+        return None
+    return parts.path + (f'?{parts.query}' if parts.query else '')
 
 
 @app.route('/transactions/<int:transaction_id>/category', methods=('POST',))

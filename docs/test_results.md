@@ -27,7 +27,7 @@ A layered testing strategy was adopted, matching the system's five-layer
 architecture so that each layer could be verified independently. Four
 complementary types of testing were applied:
 
-- **Automated testing** — a suite of 326 unit, integration and end-to-end tests
+- **Automated testing** — a suite of 353 unit, integration and end-to-end tests
   exercising the data, machine-learning, service and presentation layers,
   providing repeatable regression evidence.
 - **Machine-learning verification** — quantitative measurement of the two learning
@@ -332,13 +332,13 @@ run):
 ## 7. Automated regression suite
 
 Final run on 2026-11-19, after every fix in §8 and the post-UAT features in
-§7.1 and §7.2, using full test discovery (`python -m unittest discover -s tests -t .`)
+§7.1–§7.3, using full test discovery (`python -m unittest discover -s tests -t .`)
 in the project virtual-env. (The previous run, on 2026-11-18 before those
 features, was 240 / 240.)
 
 | Suite | Tests | Covers | Result |
 |-------|:-----:|--------|:------:|
-| `tests/test_routes.py` | 117 | Pages, auth, security controls, PWA, demo features. Includes `test_nfr01_core_pages_render_within_three_seconds`, the 6 security regression tests (D6–D9), 3 timer tests (lockout expiry, idle sign-out after 10 minutes, the idle timer refreshing on activity), the offline-mode indicator (D15 diagnostic), and the post-UAT features (§7.1): password reset and change, profile editing, email-receipt import and statement merging, the theme setting, and the §7.2 features (cash entry, search, goal editing, per-category MAE, backup and restore, cash withdrawals), with regression tests for D16–D25 | PASS |
+| `tests/test_routes.py` | 137 | Pages, auth, security controls, PWA, demo features. Includes `test_nfr01_core_pages_render_within_three_seconds`, the 6 security regression tests (D6–D9), 3 timer tests (lockout expiry, idle sign-out after 10 minutes, the idle timer refreshing on activity), the offline-mode indicator (D15 diagnostic), and the post-UAT features (§7.1): password reset and change, profile editing, email-receipt import and statement merging, the theme setting, and the §7.2 features (cash entry, search, goal editing, per-category MAE, backup and restore, cash withdrawals), with regression tests for D16–D25 | PASS |
 | `tests/test_ml.py` | 43 | Categoriser training/evaluation, forecasting, subscriptions | PASS |
 | `tests/test_ingestion.py` | 42 | CSV parsing, validation, deduplication, atomic import (NFR-06), salary detection across a promotion | PASS |
 | `tests/test_services.py` | 35 | Budget recommendations, nudges, savings, reports | PASS |
@@ -346,8 +346,8 @@ features, was 240 / 240.)
 | `tests/test_insights.py` | 17 | Smart Suggestions rules | PASS |
 | `tests/test_end_to_end.py` | 9 | Statement → dashboard integration — incl. the NFR-02 and NFR-03 target tests | PASS |
 | `tests/test_imap.py` | 26 | Email receipts, network-free: read-only mailbox access, body and attachment parsing, receipt-to-transaction matching, inbox sweep (including the Gmail Purchases tab), free-trial detection, currency detection and conversion | PASS |
-| `tests/test_assistant.py` | 14 | On-device assistant: question parsing into intent, category, merchant and period, including follow-up questions (no database) | PASS |
-| **Total** | **326** | | **326 / 326 PASS** (exit 0, 0 skipped, 315 s) |
+| `tests/test_assistant.py` | 21 | On-device assistant: question parsing into intent, category, merchant, wallet and period, including follow-up questions; answers for what-if, cut-back, receipt-item and wallet questions | PASS |
+| **Total** | **353** | | **353 / 353 PASS** (exit 0, 0 skipped) |
 
 ### Live end-to-end functional run — PC, mobile and spec-only build
 
@@ -483,6 +483,22 @@ does not log purchases will see spending under-reported. The alternative,
 counting withdrawals as spending, double-counts every logged cash purchase,
 which was judged the worse error.
 
+### 7.3 Third post-UAT batch (2026-11-24)
+
+Added after the supervisor's test on an iPhone 14 Pro Max. Covered by the
+automated suite; the live journeys in §7 were not repeated.
+
+| Feature or fix | What was tested | Tests | Result |
+|----------------|-----------------|:-----:|:------:|
+| **Simulated bank and mobile-money connections** (demo build; replaces the earlier mocks) | Zambia has no open-banking API an individual project can join, so, as agreed with the supervisor, connections are simulated: choosing a real Zambian bank or wallet shows a read-only consent screen first; unknown banks are rejected; a wallet number must match its network; MTN MoMo and Airtel Money can be connected together; consent expires after 90 days and asks to be renewed; Disconnect can remove exactly the rows that connection imported. Transactions are generated on the device, so nothing is sent anywhere (NFR-05) | 11 | PASS |
+| **Offline screen on iPhone** (candidate fix for D15) | The service worker shows the offline page after 6 s without a reply, or at once when the phone reports no network, instead of waiting on the server | — | Awaiting iPhone retest |
+| **CSV upload in iPhone Safari** | On iPhone and iPad the statement picker is not filtered by file type, so iOS no longer greys out the CSV; the server still rejects anything that is not a CSV | — | Awaiting iPhone retest |
+| **Email scan errors** | A refused sign-in shows the mail provider's own reason, never the password | 1 | PASS |
+| **Assistant: what-if, cut-back, receipt and wallet questions** | "What if I cancel DSTV?" finds the subscription by a word of the question; a subscription the user does not have is reported as such; "what if I buy a phone for K2500" is an affordability check; "groceries with cash" keeps both the category and the channel; receipt items saved without a quantity count as one (D26) | 7 + 6 | PASS |
+| **Deleting a cash entry** | Cash entries the user added can be deleted (with a confirmation); statement, sync and email rows cannot, since they would return on the next import; after deleting, the user returns to the same filtered list, and only ever within the app | 4 | PASS |
+| **Logging cash quickly** | After adding a cash transaction the page returns to the form with a note of what was added; a dashboard shortcut opens the form; common cash purchases are recognised by rule (minibus, bus, cab as Transport; market produce, mealie meal, kapenta, bread, milk as Groceries, without catching "Chicken Inn" or "business lunch") | 2 | PASS |
+| **Chat privacy** | The assistant conversation kept for the browser tab is cleared on sign-out and on the sign-in screen, so it is not visible after an automatic sign-out | 1 | PASS |
+
 ### NFR-05 — nothing transmitted off the device
 
 NFR-05 requires that no data leaves the user's machine. It was re-verified on
@@ -567,6 +583,7 @@ presentation only.
 | D23 | Review of savings goals (§7.2) | A goal could be saved with a target of **"nan" or "inf"** | `float()` accepts both, and a `<= 0` check is false for NaN | Minor (functional) | One validator for adding and editing goals: positive, finite, at most the amount ceiling | Regression test (nan, inf, 1e300 rejected) |
 | D24 | Review of search (§7.2) | Searching for `%` or `_` matched everything | The search term went into a SQL `LIKE` pattern unescaped | Cosmetic | Wildcards escaped (`LIKE … ESCAPE '!'`) | Regression test |
 | D25 | Review of cash entry (§7.2) | **Cash spending was counted twice**: a K500 ATM withdrawal plus K200 of logged cash purchases showed K700 spent | Withdrawals were filed under Transfers, which counts as spending | Major (budget accuracy) | New *Cash Withdrawal* category, assigned by rule and excluded from every spending total (forecasts, budget, report, insights, subscriptions, assistant); existing rows migrated | 4 regression tests (§7.2) |
+| D26 | Probing the assistant (§7.3) | Receipt questions ("what did I buy at Shoprite?") **crashed** when an item had no quantity; "what if I buy …" was answered as a monthly saving; named subscriptions were not found | Quantities were converted with `int()` without a fallback; the what-if pattern matched before the affordability one; the subscription's full name was searched for inside the question rather than a word of the question in the name | Minor (functional) | Blank quantity counts as 1; "buy/get/spend" what-ifs routed to the affordability answer; word-level subscription matching, with a clear reply when none matches | 5 regression tests |
 
 ¹ The assistant is a demo extension in a single-user, locally hosted app, so in
 practice this is self-XSS. It is graded Major because it would be exploitable as
@@ -607,12 +624,13 @@ behaviour.
 | NFR-05 Security / local-only | Nothing transmitted off-device | 0 external connections over 338 samples while all three journeys ran (process monitor, 2026-11-19); 40/40 browser requests local; no external URLs in source; the opt-in email-receipt scan (mailbox + exchange rates, demo build only) is the documented exception (§7) | **PASS** |
 | NFR-08 Compatibility | Chrome/Edge, desktop + mobile | Chrome 152 desktop + 375 px; Edge 157 (service worker confirmed); Samsung Galaxy S25+ (Android 17, Chrome), installed as a PWA; iPhone 13 (iOS 27.2.1, Safari) — all tested features except the offline page (D15, open) (§5.1); Firefox out of scope by decision (§6) | **PASS** (D15 open on iOS) |
 
-Nineteen defects (D5–D13 and D16–D25, §8) were found and resolved: one
+Twenty defects (D5–D13 and D16–D26, §8) were found and resolved: one
 requirement breach (NFR-01), eight security issues, one broken documented
 install path, four mobile or usability issues (including backups on phones,
 D22), one crash (D16), one demo feature that rarely worked (D20), the double
-counting of cash spending (D25) and two input-handling faults (D23, D24). Each
-was re-verified after its fix. One defect
+counting of cash spending (D25), two input-handling faults (D23, D24) and
+the assistant faults found by probing it (D26). Each was re-verified after its
+fix. One defect
 remains **open**: the offline fallback on iOS (D15, Minor). Its two likely causes
 are documented with a next step in §8.
 

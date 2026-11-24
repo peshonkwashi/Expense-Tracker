@@ -146,13 +146,17 @@ correction.</p>
         <p class="muted">Cash you take out at an ATM or a mobile-money agent is
         filed as <strong>Cash Withdrawal</strong> and not counted as spending, so
         log what you spend the cash on here.</p>
+        {% if last_cash %}
+        <p class="notice success-note" role="status">{{ last_cash }} Add another below.</p>
+        {% endif %}
         <form method="POST" action="{{ url_for('add_transaction') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <div class="grid two">
                 <div class="field">
                     <label for="add_description">What was it for?</label>
                     <input type="text" id="add_description" name="description" required
-                           maxlength="120" placeholder="e.g. Minibus fare" autocomplete="off">
+                           maxlength="120" placeholder="e.g. Minibus fare" autocomplete="off"
+                           {% if last_cash %}autofocus{% endif %}>
                 </div>
                 <div class="field">
                     <label for="add_amount">Amount ({{ currency }})</label>
@@ -293,6 +297,19 @@ correction.</p>
                     </td>
                     <td data-label="Correct it" class="no-print cell-stack">
                         <div class="correct-controls">
+                            {% if (txn['import_hash'] or '').startswith('manual-') %}
+                            {# Cash entries are the only rows a user typed in, so the
+                               only ones that can be deleted (a statement row would
+                               come back on the next upload). #}
+                            <form method="POST" class="txn-delete"
+                                  action="{{ url_for('delete_transaction', transaction_id=txn['transaction_id']) }}"
+                                  onsubmit="return confirm('Delete this cash transaction? This cannot be undone.');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                <span class="badge sub">cash entry</span>
+                                <button type="submit" class="link-button danger-link"
+                                        aria-label="Delete cash transaction {{ txn['description'] }}">Delete</button>
+                            </form>
+                            {% endif %}
                             <form class="inline-form" method="POST"
                                   action="{{ url_for('recategorise', transaction_id=txn['transaction_id']) }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>

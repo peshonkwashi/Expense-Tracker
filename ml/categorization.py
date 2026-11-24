@@ -44,8 +44,13 @@ RULE_SEED = [
     (r'\b((airtel|mtn|zamtel)\s*money|mobile\s*money|momo\s*transfer)\b', 'Transfers'),
     (r'\b(shoprite|pick\s*n\s*pay|picknpay|spar|game\s*store|choppies|melissa|'
      r'food\s*lover|supermarket|grocer|butchery|market)\b', 'Groceries'),
+    # Everyday cash purchases logged by hand ("Add a cash transaction").
+    # Words such as "chicken" are left out: "Chicken Inn" is Dining Out.
+    (r'\b(vegetables?|veggies|tomato(es)?|onions?|cabbage|kapenta|mealie\s*meal|'
+     r'bread|milk|eggs|fruits?|bananas?|tuntemba)\b', 'Groceries'),
     (r'\b(puma|total|totalenergies|engen|mount\s*meru|petroda|fuel|petrol|diesel|'
-     r'filling\s*station|yango|ulendo|taxi|bus\s*fare|intercity|parking|toll)\b',
+     r'filling\s*station|yango|ulendo|taxi|bus\s*fare|intercity|parking|toll|'
+     r'minibus|bus|cab)\b',
      'Transport'),
     (r'\b(zesco|prepaid\s*units|lwsc|water\s*bill|nwasco|electricity|utility|'
      r'garbage|refuse)\b', 'Utilities'),

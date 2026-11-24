@@ -17,8 +17,10 @@ Every user-controlled string (category, goal, merchant names) is escaped
 before it is placed in the HTML answer.
 """
 import calendar
+import math
 import re
 from dataclasses import dataclass, field
+from urllib.parse import urlencode
 from datetime import date, timedelta
 
 from markupsafe import escape
@@ -107,6 +109,8 @@ class Query:
     categories: list = field(default_factory=list)   # category names
     category_label: str = None
     merchant: str = None
+    receipt_item: str = None
+    channel: str = None                              # 'mtn', 'airtel', 'bank', 'cash', 'all'
     period: Period = None
     period_explicit: bool = False
     amount: float = None
@@ -244,8 +248,61 @@ def match_merchant(text, descriptions):
     return None
 
 
+CHANNEL_PATTERNS = (
+    ('all', r'\b(mtn\s*(?:momo|money)?\s*(?:vs\.?|versus|and|or)\s*airtel'
+            r'|airtel\s*(?:money)?\s*(?:vs\.?|versus|and|or)\s*mtn'
+            r'|by\s+(wallet|channel|payment\s+method)|all\s+wallets|mobile\s+money\s+breakdown)\b'),
+    ('mtn', r'\b(mtn\s*momo|mtn\s*money|momo\s*pay|momo)\b'),
+    ('airtel', r'\b(airtel\s*money)\b'),
+    ('cash', r'\b(cash\s+(?:expenses?|spending|spent|transactions?|purchases?)'
+             r'|in\s+cash|with\s+cash|paid\s+cash|spent\s+cash|how\s+much\s+cash)\b'),
+    ('bank', r'\b(bank\s+(?:sync|card|account)\s*(?:spending|transactions?|expenses?)?)\b'),
+)
+
+
+def _without_channel(text):
+    for _, pattern in CHANNEL_PATTERNS:
+        text = re.sub(pattern, ' ', text)
+    return ' '.join(text.split())
+
+
+def match_channel(text):
+    for key, pattern in CHANNEL_PATTERNS:
+        if re.search(pattern, text):
+            return key
+    return None
+
+
+def match_receipt_item(text, item_names):
+    """Match a 1-3 word phrase in `text` against known Receipt_Item names."""
+    if not item_names:
+        return None
+    words = [w for w in re.findall(r'[a-z0-9]+', text)]
+    phrases = []
+    for size in (3, 2, 1):
+        for i in range(len(words) - size + 1):
+            gram = words[i:i + size]
+            if gram[0] in STOPWORDS or gram[-1] in STOPWORDS:
+                continue
+            phrase = ' '.join(gram)
+            if len(phrase) >= 3 and not phrase.isdigit():
+                phrases.append(phrase)
+    for phrase in phrases:
+        pattern = re.compile(rf'\b{re.escape(phrase)}\b')
+        if any(pattern.search(name) for name in item_names):
+            return phrase
+    return None
+
+
 INTENTS = (
     ('help', r'\b(help|what can you (do|answer)|what (can|should) i ask)\b'),
+    ('whatif', r'\bwhat\s+if\b|\bif\s+i\s+(cut|reduce|trim|cancel|drop|stop|save)\b'
+               r'|\bcancel(ling)?\s+[a-z0-9]+'),
+    ('cutback', r'\b(overspend(ing)?|over\s+budget|cut\s*back|where\s+can\s+i\s+(save|cut|trim)'
+                r'|unusual\s+(expenses?|spending)|alerts?|nudges?)\b'),
+    ('receipt', r'\bwhat\s+did\s+i\s+buy\b|\breceipt\s+items?\b|\bitemised\b'),
+    ('left', r'\bsafe\s+to\s+spend\b|\bcan\s+i\s+spend\s+(per|a)\s+day\b'
+             r'|\b(per|a)\s+day\s+until\s+pay\s*day\b'),
     ('payday', r'\bpay\s*day\b|\bget paid\b|\bnext salary\b|\bsalary (come|arrive|land)'),
     ('afford', r'\bafford\b|\bcan i (buy|spend|get)\b|\bshould i (buy|spend|get)\b'),
     ('compare', r'\bcompare|\bversus\b|\bvs\b|\b(more|less) than (last|previous)'
@@ -272,10 +329,18 @@ FOLLOWUP = re.compile(r'^\s*(and|what about|how about|what of|and for|same for|a
                       r'|^\s*(for|in|on|at)\b')
 
 
-def parse(question, category_names, descriptions, today, salary_day, context=None):
+def parse(question, category_names, descriptions, today, salary_day,
+          context=None, item_names=None):
     text = ' '.join((question or '').lower().split())
     query = Query(text=text)
-    query.categories, query.category_label = match_categories(text, category_names)
+    query.channel = match_channel(text)
+    if query.channel != 'all':
+        # The wallet phrase is removed first, so "airtel money" or "momo" is
+        # never read as a category ("Airtime & Data"), while "groceries with
+        # cash" still keeps its category.
+        category_text = _without_channel(text) if query.channel else text
+        query.categories, query.category_label = match_categories(
+            category_text, category_names)
     query.period, query.period_explicit = parse_period(
         _COMPARE_TARGET.sub(' ', text), today, salary_day)
     baseline = _COMPARE_TARGET.search(text)
@@ -289,11 +354,22 @@ def parse(question, category_names, descriptions, today, salary_day, context=Non
         if re.search(pattern, text):
             query.intent = intent
             break
-    if not query.categories and query.intent not in ('help', 'payday'):
+    if query.intent == 'whatif' and re.search(
+            r'\b(buy|get|purchase|pay\s+for|spend|order)\b', text):
+        query.intent = 'afford'
+    if query.channel == 'all' and query.intent in (None, 'spend', 'compare'):
+        query.intent = 'channels'
+    if (not query.categories and not query.channel
+            and query.intent not in ('help', 'payday', 'cutback', 'whatif')):
         query.merchant = match_merchant(text, descriptions)
+    if (not query.categories and not query.merchant and not query.channel
+            and query.intent not in ('help', 'payday', 'cutback', 'whatif')):
+        query.receipt_item = match_receipt_item(text, item_names or set())
+        if query.receipt_item and query.intent in (None, 'spend', 'count'):
+            query.intent = 'receipt'
 
     context = context or {}
-    has_subject = bool(query.categories or query.merchant)
+    has_subject = bool(query.categories or query.merchant or query.receipt_item or query.channel)
     query.followup = bool(context) and (
         bool(FOLLOWUP.search(text))
         or (query.intent is None and (has_subject or query.period_explicit)))
@@ -340,11 +416,49 @@ def _filter_sql(query, alias='t'):
     return sql
 
 
+_CHANNEL_LABELS = {
+    'mtn': 'MTN MoMo',
+    'airtel': 'Airtel Money',
+    'bank': 'Bank',
+    'cash': 'Cash',
+}
+
+
+def _row_channel(row):
+    ih = (row.get('import_hash') or '').lower()
+    desc = (row.get('description') or '').lower()
+    if ih.startswith('sync-momo-mtn-') or 'mtn momo' in desc or 'momo pay' in desc:
+        return 'mtn'
+    if ih.startswith('sync-momo-airtel-') or 'airtel money' in desc:
+        return 'airtel'
+    if ih.startswith('manual-'):
+        return 'cash'
+    if ih.startswith('sync-bank-'):
+        return 'bank'
+    return 'bank'
+
+
+def _link(href, label):
+    return f' <a class="chat-link" href="{escape(href)}">{escape(label)} →</a>'
+
+
+def _txns_link(query):
+    params = {}
+    if query.categories and len(query.categories) == 1:
+        params['category'] = query.categories[0]
+    elif query.merchant:
+        params['q'] = query.merchant
+    if query.period and query.period.kind == 'month':
+        params['month'] = query.period.start.strftime('%Y-%m')
+    qs = ('?' + urlencode(params)) if params else ''
+    return _link(f'/transactions{qs}', 'View transactions')
+
+
 def _debits(conn, user_id, query, period=None, limit=None, order='t.transaction_date DESC'):
     period = period or query.period
     params = [user_id, period.start.isoformat(), period.end.isoformat()]
     sql = ('SELECT t.transaction_id, t.transaction_date, t.description, t.amount, '
-           'c.category_name FROM Transaction_Record t '
+           't.import_hash, c.category_name FROM Transaction_Record t '
            'LEFT JOIN Category c ON t.category_id = c.category_id '
            f'WHERE {_filter_sql(query)}')
     if query.categories:
@@ -352,6 +466,8 @@ def _debits(conn, user_id, query, period=None, limit=None, order='t.transaction_
         params += query.categories
     sql += f' ORDER BY {order}'
     rows = [dict(r) for r in conn.execute(sql, params)]
+    if query.channel and query.channel in _CHANNEL_LABELS:
+        rows = [r for r in rows if _row_channel(r) == query.channel]
     if query.merchant:
         pattern = re.compile(rf'\b{re.escape(query.merchant)}\b')
         rows = [r for r in rows
@@ -383,7 +499,12 @@ def _answer_spend(conn, user, query, today):
     rows = _debits(conn, user['user_id'], query)
     total = _total(rows)
     subject = _subject(query)
-    where = f' on {subject}' if query.categories else (f' at {subject}' if subject else '')
+    if query.channel and query.channel in _CHANNEL_LABELS:
+        where = f' via <strong>{_CHANNEL_LABELS[query.channel]}</strong>'
+        if query.categories:
+            where = f' on {subject}' + where
+    else:
+        where = f' on {subject}' if query.categories else (f' at {subject}' if subject else '')
     if not rows:
         return f'No spending{where} {escape(query.period.label)}.'
     text = (f'You spent {_money(total)}{where} {escape(query.period.label)}, '
@@ -399,11 +520,11 @@ def _answer_spend(conn, user, query, today):
                          f'{_money(allocation)} budget, ' +
                          (f'with {_money(left)} left.' if left >= 0 else
                           f'{_money(-left)} over.'))
-        elif not subject:
+        elif not subject and not query.channel:
             salary = float(user['salary_amount'])
             if salary:
                 text += f' That is {total / salary * 100:.0f}% of your salary.'
-    return text
+    return text + _txns_link(query)
 
 
 def _answer_compare(conn, user, query, today):
@@ -462,7 +583,7 @@ def _answer_left(conn, user, query, today):
     if over:
         text += (' Already over budget: '
                  + ', '.join(f'<strong>{escape(c)}</strong>' for c in over) + '.')
-    return text
+    return text + _link('/budget', 'Open budget')
 
 
 def _answer_afford(conn, user, query, today):
@@ -548,7 +669,7 @@ def _answer_goals(conn, user, query, today):
     parts = [(f"<strong>{escape(g['goal_name'])}</strong> is {g['progress']:.0f}% funded "
               f"({_money(g['monthly_required'])}/month still needed"
               f"{', overdue' if g['overdue'] else ''})") for g in goals[:3]]
-    return 'Here is where your savings goals stand: ' + '; '.join(parts) + '.'
+    return 'Here is where your savings goals stand: ' + '; '.join(parts) + '.' + _link('/savings', 'Manage goals')
 
 
 def _answer_subscriptions(conn, user, query, today):
@@ -621,6 +742,224 @@ def _answer_average(conn, user, query, today):
             f'{escape(query.period.label)}: {_money(_total(rows))} over {days} days.')
 
 
+_WHATIF_WORDS = {'what', 'cancel', 'cancelling', 'cut', 'trim', 'reduce', 'drop',
+                 'stop', 'save', 'month', 'monthly', 'year', 'subscription'}
+
+
+def _answer_whatif(conn, user, query, today):
+    """Simulate cancelling a subscription or trimming spending and show its
+    impact on annual savings and the user's nearest active savings goal."""
+    monthly_saving = None
+    action_label = None
+
+    # 1. Check if the user mentioned a detected subscription to cancel.
+    subs = subscriptions.detect_subscriptions(conn, user['user_id'], persist=False)
+    asked = {w for w in re.findall(r'[a-z0-9]+', query.text)
+             if len(w) >= 3 and w not in STOPWORDS and w not in _WHATIF_WORDS}
+    for sub in subs:
+        names = set(re.findall(r'[a-z0-9]+', categorization.normalise(
+            f"{sub['label']} {sub['key']}")))
+        if asked & names:
+            monthly_saving = float(sub['monthly_amount'])
+            action_label = f"cancelling <strong>{escape(sub['label'])}</strong>"
+            break
+    target = re.search(r'\bcancel(?:ling)?\s+(?:my\s+|the\s+)?([a-z0-9][a-z0-9 ]{1,30}?)(?:\?|$|\s+(?:sub|and|then)\b)',
+                       query.text)
+    if monthly_saving is None and target and not query.amount and not query.categories:
+        listed = ', '.join(f"<strong>{escape(s_['label'])}</strong> "
+                           f"({_money(s_['monthly_amount'])}/month)" for s_ in subs[:5])
+        return (f"I can't find a recurring charge for "
+                f"<strong>{escape(target.group(1).strip())}</strong>. "
+                + (f'The subscriptions I have detected are {listed}.' if subs else
+                   'I have not detected any subscriptions yet; they appear once '
+                   'the same charge repeats each month.')
+                + _link('/transactions', 'View transactions'))
+
+    # 2. Otherwise use an explicit K-amount ("cut dining out by K300").
+    if monthly_saving is None and query.amount:
+        monthly_saving = float(query.amount)
+        if query.categories:
+            action_label = (f"cutting <strong>{escape(query.category_label)}</strong> "
+                            f"by {_money(monthly_saving)}/month")
+        else:
+            action_label = f"saving an extra {_money(monthly_saving)}/month"
+
+    # 3. Or default to a realistic 20% trim on a named category.
+    if monthly_saving is None and query.categories:
+        budget = _budget(conn, user, today)
+        if budget:
+            cat_rows = [r for r in budget['rows'] if r['category'] in query.categories]
+            base = sum(r['recommended'] for r in cat_rows)
+            if base > 0:
+                monthly_saving = round(base * 0.20, 2)
+                action_label = (f"trimming <strong>{escape(query.category_label)}</strong> "
+                                f"by 20% ({_money(monthly_saving)}/month)")
+
+    if not monthly_saving:
+        return ('Try a specific scenario, e.g. <em>"what if I cancel Netflix?"</em> '
+                'or <em>"if I cut dining out by K300?"</em>, and I will work out '
+                'the yearly savings and goal impact.')
+
+    annual = monthly_saving * 12
+    text = (f'By {action_label}, you would free up {_money(monthly_saving)} a month '
+            f'— <strong>{_money(annual)} a year</strong>.')
+
+    budget = _budget(conn, user, today)
+    goals = [g for g in recommendation.goal_requirements(conn, user['user_id'], today)
+             if g['shortfall'] > 0]
+    if goals:
+        goal = goals[0]
+        base_rate = (budget['recommended_savings'] if budget else 0.0)
+        new_rate = base_rate + monthly_saving
+        new_months = max(1, math.ceil(goal['shortfall'] / new_rate))
+        if base_rate > 0:
+            old_months = max(1, math.ceil(goal['shortfall'] / base_rate))
+            saved_months = old_months - new_months
+            if saved_months > 0:
+                text += (f" Put toward <strong>{escape(goal['goal_name'])}</strong>, "
+                         f"that reaches your goal in <strong>{new_months} month"
+                         f"{'s' if new_months != 1 else ''}</strong> instead of "
+                         f"{old_months} ({saved_months} month"
+                         f"{'s' if saved_months != 1 else ''} sooner).")
+            else:
+                text += (f" Put toward <strong>{escape(goal['goal_name'])}</strong>, "
+                         f"it covers {monthly_saving / goal['shortfall'] * 100:.0f}% "
+                         f"of the remaining shortfall each month.")
+        else:
+            text += (f" Put toward <strong>{escape(goal['goal_name'])}</strong>, "
+                     f"it would fund the remaining {_money(goal['shortfall'])} in "
+                     f"about <strong>{new_months} month"
+                     f"{'s' if new_months != 1 else ''}</strong>.")
+    return text + _link('/savings', 'Manage goals')
+
+
+def _answer_cutback(conn, user, query, today):
+    """Surface overspending categories, 80% nudges and top discretionary trim targets."""
+    budget = _budget(conn, user, today)
+    if budget is None:
+        rows = _debits(conn, user['user_id'], query)
+        if not rows:
+            return 'No spending recorded yet to spot cutbacks.'
+        groups = {}
+        for r in rows:
+            cat = r['category_name'] or 'Uncategorised'
+            groups[cat] = groups.get(cat, 0.0) + float(r['amount'])
+        top = sorted(groups.items(), key=lambda kv: kv[1], reverse=True)[:3]
+        parts = ', '.join(f'<strong>{escape(c)}</strong> ({_money(v)})' for c, v in top)
+        return (f'Budgets unlock after the learning phase. So far your largest '
+                f'spending areas are {parts}.')
+
+    over = [r for r in budget['rows'] if r['status'] == 'over']
+    warn = [r for r in budget['rows'] if r['status'] == 'warning']
+    disc = sorted(
+        [r for r in budget['rows'] if r['type'] == 'DISCRETIONARY' and r['spent'] > 0],
+        key=lambda r: r['spent'], reverse=True)
+
+    pieces = []
+    if over:
+        names = ', '.join(f"<strong>{escape(r['category'])}</strong> "
+                          f"({_money(r['spent'] - r['recommended'])} over)"
+                          for r in over[:3])
+        pieces.append(f'Already over budget this month: {names}.')
+    if warn:
+        names = ', '.join(f"<strong>{escape(r['category'])}</strong> "
+                          f"({r['spent'] / r['recommended'] * 100:.0f}% used)"
+                          for r in warn[:3])
+        pieces.append(f'Close to their limit (≥80%): {names}.')
+    if disc:
+        best = disc[0]
+        trim = round(best['spent'] * 0.20, 2)
+        pieces.append(f"Easiest discretionary trim: cutting <strong>{escape(best['category'])}</strong> "
+                      f"by 20% would save about {_money(trim)}/month ({_money(trim * 12)}/year).")
+    if not pieces:
+        pieces.append('Every category is currently comfortably within its budget this month.')
+    return ' '.join(pieces) + _link('/budget', 'Open budget')
+
+
+def _qty(row):
+    try:
+        return max(1, int(row['quantity'] or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _answer_receipt(conn, user, query, today):
+    """Answer item-level questions from the Receipt_Item table."""
+    period = query.period if query.period_explicit else Period(
+        date(1900, 1, 1), today, 'in total', 'all')
+    rows = conn.execute(
+        'SELECT ri.item_name, ri.amount, ri.quantity, t.transaction_date, t.description '
+        'FROM Receipt_Item ri '
+        'JOIN Transaction_Record t ON ri.transaction_id = t.transaction_id '
+        'WHERE t.user_id = ? AND t.transaction_date BETWEEN ? AND ? '
+        'ORDER BY t.transaction_date DESC, ri.item_id DESC',
+        (user['user_id'], period.start.isoformat(), period.end.isoformat())
+    ).fetchall()
+
+    if query.merchant:
+        pat = re.compile(rf'\b{re.escape(query.merchant)}\b')
+        matched = [r for r in rows if pat.search(categorization.normalise(r['description']))]
+        if not matched:
+            return (f'No itemised receipt items recorded for '
+                    f'<strong>{escape(query.merchant.title())}</strong> '
+                    f'{escape(period.label)}. Scan a receipt or add items on the '
+                    f'Transactions page.')
+        total = sum(float(r['amount']) for r in matched)
+        items_html = ''.join(
+            f"<li>{r['transaction_date'][:10]}: {_qty(r)}× "
+            f"{escape(r['item_name'])} {_money(float(r['amount']))}</li>"
+            for r in matched[:8])
+        return (f'Itemised purchases at <strong>{escape(query.merchant.title())}</strong> '
+                f'{escape(period.label)} ({_money(total)} across {len(matched)} '
+                f'line{"s" if len(matched) != 1 else ""}):<ul>{items_html}</ul>'
+                + _txns_link(query))
+
+    if query.receipt_item:
+        pat = re.compile(rf'\b{re.escape(query.receipt_item)}\b')
+        matched = [r for r in rows if pat.search(categorization.normalise(r['item_name']))]
+        if not matched:
+            return (f'No itemised receipt lines matching '
+                    f'<strong>{escape(query.receipt_item)}</strong> {escape(period.label)}.')
+        total = sum(float(r['amount']) for r in matched)
+        qty = sum(_qty(r) for r in matched)
+        return (f'You spent {_money(total)} on <strong>{escape(query.receipt_item.title())}</strong> '
+                f'{escape(period.label)} ({qty} item{"s" if qty != 1 else ""} across '
+                f'{len(matched)} receipt line{"s" if len(matched) != 1 else ""}).')
+
+    if not rows:
+        return ('No receipt items have been scanned or added yet. Use '
+                '<strong>Scan Receipt</strong> on any debit in Transactions to '
+                'track individual items.')
+    items_html = ''.join(
+        f"<li>{r['transaction_date'][:10]} ({escape(r['description'])}): "
+        f"{_qty(r)}× {escape(r['item_name'])} {_money(float(r['amount']))}</li>"
+        for r in rows[:6])
+    return f'Your latest itemised receipt purchases:<ul>{items_html}</ul>'
+
+
+def _answer_channels(conn, user, query, today):
+    """Compare spending across MTN MoMo, Airtel Money, Bank and Cash."""
+    rows = _debits(conn, user['user_id'], Query(text='', period=query.period))
+    if not rows:
+        return f'No spending recorded {escape(query.period.label)}.'
+    totals = {'mtn': 0.0, 'airtel': 0.0, 'bank': 0.0, 'cash': 0.0}
+    counts = {'mtn': 0, 'airtel': 0, 'bank': 0, 'cash': 0}
+    for r in rows:
+        ch = _row_channel(r)
+        totals[ch] += float(r['amount'])
+        counts[ch] += 1
+    grand = sum(totals.values())
+    active = [(ch, totals[ch], counts[ch]) for ch in ('mtn', 'airtel', 'bank', 'cash')
+              if totals[ch] > 0]
+    active.sort(key=lambda item: item[1], reverse=True)
+    parts = [f"<strong>{_CHANNEL_LABELS[ch]}</strong> {_money(val)} "
+             f"({val / grand * 100:.0f}%, {cnt} txn{'s' if cnt != 1 else ''})"
+             for ch, val, cnt in active]
+    return (f'Spending by wallet &amp; channel {escape(query.period.label)}: '
+            + '; '.join(parts) + f'. Total {_money(grand)}.'
+            + _link('/transactions', 'View transactions'))
+
+
 HELP = ("I can answer questions about your own money, entirely on this device. Try: "
         "<em>how much did I spend on transport last month?</em>, "
         "<em>how much do I have left?</em>, <em>can I afford K800?</em>, "
@@ -637,6 +976,8 @@ ANSWERS = {
     'goals': _answer_goals, 'subscriptions': _answer_subscriptions,
     'income': _answer_income, 'payday': _answer_payday, 'recent': _answer_recent,
     'count': _answer_count, 'average': _answer_average,
+    'whatif': _answer_whatif, 'cutback': _answer_cutback,
+    'receipt': _answer_receipt, 'channels': _answer_channels,
 }
 
 SUGGESTIONS = {
@@ -648,9 +989,13 @@ SUGGESTIONS = {
     'forecast': ['How much do I have left?', 'How are my goals?'],
     'goals': ['How much do I have left?', 'Can I afford K500?'],
     'subscriptions': ['How much do I have left?', 'My biggest expenses this month'],
-    'payday': ['How much do I have left?', 'Daily average this cycle'],
-    None: ['How much have I spent this month?', 'How much do I have left?',
-           'Can I afford K500?', 'When is payday?'],
+    'payday': ['How much can I spend per day until payday?', 'Daily average this cycle'],
+    'whatif': ['Where can I cut back?', 'How are my goals?'],
+    'cutback': ['What if I cut dining out by K300?', 'My subscriptions'],
+    'receipt': ['My biggest expenses this month', 'How much do I have left?'],
+    'channels': ['How much did I spend on MTN MoMo?', 'How much cash did I spend this month?'],
+    None: ['How much can I spend per day until payday?', 'Where can I cut back?',
+           'MTN MoMo vs Airtel Money this month', 'What if I cancel Netflix?'],
 }
 
 
@@ -663,8 +1008,12 @@ def answer(conn, user, question, context=None, today=None):
     descriptions = {categorization.normalise(r['description']) for r in conn.execute(
         "SELECT DISTINCT description FROM Transaction_Record WHERE user_id = ? "
         "AND transaction_type = 'DEBIT'", (user['user_id'],))}
+    item_names = {categorization.normalise(r['item_name']) for r in conn.execute(
+        "SELECT DISTINCT ri.item_name FROM Receipt_Item ri "
+        "JOIN Transaction_Record t ON ri.transaction_id = t.transaction_id "
+        "WHERE t.user_id = ?", (user['user_id'],))}
     query = parse(question, category_names, descriptions, today,
-                  int(user['salary_day']), context)
+                  int(user['salary_day']), context, item_names=item_names)
 
     if query.intent == 'help':
         return Reply(HELP, SUGGESTIONS[None])

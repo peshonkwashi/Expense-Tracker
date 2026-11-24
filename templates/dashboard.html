@@ -9,6 +9,8 @@
         paid on day {{ user['salary_day'] }} of each month.
         <a href="{{ url_for('settings') }}#profile" class="text-link inline">Update salary</a></p>
     </div>
+    <a class="button secondary" href="{{ url_for('transactions') }}#add-transaction"
+       style="margin-bottom:1.25rem;">+ Add cash purchase</a>
 </div>
 
 {% if not learning.complete %}
@@ -70,10 +72,13 @@
 
 {% if demo_features %}
 <div class="card" style="margin-bottom:1.25rem;">
-    <h2>Financial assistant</h2>
-    <p class="muted">Ask about your spending, budgets, payday, goals or
-    subscriptions in plain English. It answers from your own data on this
-    device; nothing you type is sent anywhere.</p>
+    <div class="split" style="margin-bottom:.35rem;">
+        <h2 style="margin:0;">Financial assistant</h2>
+        <button type="button" id="chat-clear-btn" class="secondary small" hidden>Clear chat</button>
+    </div>
+    <p class="muted">Ask about your spending, budgets, payday, goals, receipts,
+    wallets or "what-if" savings in plain English. It answers from your own data
+    on this device; nothing you type is sent anywhere.</p>
     
     {# role=log + aria-live: screen readers announce each new answer as it arrives. #}
     <div id="chat-history" role="log" aria-live="polite" aria-label="Assistant conversation" style="min-height: 100px; max-height: 300px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.8rem;">
@@ -81,8 +86,8 @@
     </div>
     
     <div id="chat-suggestions" class="chat-suggestions" aria-label="Suggested questions">
-        {% for text in ['How much have I spent this month?', 'How much do I have left?',
-                        'Can I afford K500?', 'When is payday?'] %}
+        {% for text in ['How much can I spend per day until payday?', 'Where can I cut back?',
+                        'MTN MoMo vs Airtel Money this month', 'What if I cancel Netflix?'] %}
         <button type="button" class="chip" data-question="{{ text }}">{{ text }}</button>
         {% endfor %}
     </div>
@@ -94,9 +99,20 @@
     </form>
     
     <script>
-        const BUBBLE_USER = 'align-self: flex-end; background: var(--brand); color: white; padding: 0.6rem 1rem; border-radius: 1rem 1rem 0 1rem; max-width: 80%;';
+        const CHAT_STORAGE_KEY = 'expense-tracker-chat';
+        const BUBBLE_USER = 'align-self: flex-end; background: var(--btn-bg); color: white; padding: 0.6rem 1rem; border-radius: 1rem 1rem 0 1rem; max-width: 80%;';
         const BUBBLE_BOT = 'align-self: flex-start; background: var(--info-soft); color: var(--ink); padding: 0.6rem 1rem; border-radius: 1rem 1rem 1rem 0; max-width: 80%;';
 
+        function loadChat() {
+            try { return JSON.parse(sessionStorage.getItem(CHAT_STORAGE_KEY) || '[]'); }
+            catch (e) { return []; }
+        }
+        function saveChat(items) {
+            try { sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(items.slice(-20))); }
+            catch (e) {}
+            const clearBtn = document.getElementById('chat-clear-btn');
+            if (clearBtn) clearBtn.hidden = items.length === 0;
+        }
         function addBubble(history, style) {
             const div = document.createElement('div');
             div.setAttribute('style', style);
@@ -104,6 +120,27 @@
             history.scrollTop = history.scrollHeight;
             return div;
         }
+
+        // Restore recent conversation within this browser session.
+        (function restoreChat() {
+            const history = document.getElementById('chat-history');
+            const items = loadChat();
+            items.forEach(function (entry) {
+                if (entry.role === 'user') {
+                    addBubble(history, BUBBLE_USER).textContent = entry.content;
+                } else {
+                    addBubble(history, BUBBLE_BOT).innerHTML = entry.content;
+                }
+            });
+            const clearBtn = document.getElementById('chat-clear-btn');
+            if (clearBtn) {
+                clearBtn.hidden = items.length === 0;
+                clearBtn.addEventListener('click', function () {
+                    history.replaceChildren();
+                    saveChat([]);
+                });
+            }
+        })();
 
         // Suggestion chips: tapping one asks it. The server sends fresh
         // follow-ups with every answer; they are inserted as text, not HTML.
@@ -136,6 +173,9 @@
             // The user's own text is inserted as plain text, never parsed as
             // HTML, so typing markup cannot inject script (XSS).
             addBubble(history, BUBBLE_USER).textContent = question;
+            const stored = loadChat();
+            stored.push({ role: 'user', content: question });
+            saveChat(stored);
             input.value = '';
 
             const pending = addBubble(history, BUBBLE_BOT + ' font-style: italic;');
@@ -152,6 +192,8 @@
                 // The answer is a server-built HTML fragment (<strong> emphasis)
                 // in which every user-controlled value is already escaped.
                 addBubble(history, BUBBLE_BOT).innerHTML = data.answer;
+                stored.push({ role: 'bot', content: data.answer });
+                saveChat(stored);
                 showSuggestions(data.suggestions);
             } catch (err) {
                 pending.style.fontStyle = 'normal';

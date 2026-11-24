@@ -1243,7 +1243,7 @@ class DemoFeatureFlagTests(RouteTestCase):
 
     def test_demo_entry_points_present_by_default(self):
         dashboard = self.client.get('/').data
-        self.assertIn(b'<h2>Financial assistant</h2>', dashboard)
+        self.assertIn(b'Financial assistant</h2>', dashboard)
         self.assertIn(b'Household', dashboard)  # nav link
         self.assertEqual(self.client.get('/household').status_code, 200)
         self.assertIn(b'Sync with Bank', self.client.get('/transactions').data)
@@ -1254,7 +1254,7 @@ class DemoFeatureFlagTests(RouteTestCase):
         config.DEMO_FEATURES = False
         try:
             dashboard = self.client.get('/').data
-            self.assertNotIn(b'<h2>Financial assistant</h2>', dashboard)
+            self.assertNotIn(b'Financial assistant</h2>', dashboard)
             self.assertNotIn(b'Household', dashboard)
             self.assertNotIn(b'Sync with Bank',
                              self.client.get('/transactions').data)
@@ -1647,6 +1647,84 @@ class CashWithdrawalTests(RouteTestCase):
         self.assertEqual(labels['ATM Cash Withdrawal'], 'Cash Withdrawal')
         self.assertEqual(labels['ATM Withdrawal kept by me'], 'Transfers')  # user's choice
         self.assertEqual(labels['Sent to Mobile Wallet'], 'Transfers')
+
+
+class CashEntryQualityOfLifeTests(RouteTestCase):
+    def setUp(self):
+        super().setUp()
+        self.complete_setup()
+
+    def _add(self, description='Minibus fare', amount='15.00'):
+        from datetime import date
+        return self.client.post('/transactions/add', data={
+            'description': description, 'amount': amount,
+            'transaction_date': date.today().isoformat(), 'transaction_type': 'DEBIT',
+        })
+
+    def _ids(self):
+        import database
+        conn = database.get_db_connection()
+        rows = {r['description']: r['transaction_id'] for r in conn.execute(
+            'SELECT transaction_id, description FROM Transaction_Record')}
+        conn.close()
+        return rows
+
+    def test_adding_returns_to_the_cash_form_with_a_note(self):
+        response = self._add()
+        self.assertTrue(response.headers['Location'].endswith('#add-transaction'))
+        page = self.client.get('/transactions').data
+        self.assertIn(b'Minibus fare', page)
+        self.assertIn(b'Add another below.', page)
+        self.assertIn(b'autofocus', page)
+        self.assertNotIn(b'Add another below.', self.client.get('/transactions').data)
+
+    def test_a_cash_entry_can_be_deleted(self):
+        self._add()
+        txn_id = self._ids()['Minibus fare']
+        page = self.client.get('/transactions').data
+        self.assertIn(f'/transactions/{txn_id}/delete'.encode(), page)
+        response = self.client.post(f'/transactions/{txn_id}/delete', follow_redirects=True)
+        self.assertIn(b'Deleted', response.data)
+        self.assertNotIn('Minibus fare', self._ids())
+
+    def test_imported_transactions_cannot_be_deleted(self):
+        import database
+        conn = database.get_db_connection()
+        user = database.get_user(conn)
+        conn.execute(
+            "INSERT INTO Transaction_Record (transaction_date, description, amount, "
+            "transaction_type, import_hash, user_id) "
+            "VALUES ('2026-11-01', 'Statement row', 50, 'DEBIT', 'abc123', ?)",
+            (user['user_id'],))
+        conn.commit()
+        conn.close()
+        txn_id = self._ids()['Statement row']
+        self.assertNotIn(f'/transactions/{txn_id}/delete'.encode(),
+                         self.client.get('/transactions').data)
+        response = self.client.post(f'/transactions/{txn_id}/delete', follow_redirects=True)
+        self.assertIn(b'Only cash transactions you added yourself', response.data)
+        self.assertIn('Statement row', self._ids())
+
+    def test_delete_returns_to_the_same_filtered_list_only(self):
+        self._add('Market tomatoes', '30.00')
+        self._add('Bus to town', '10.00')
+        first = self._ids()['Market tomatoes']
+        response = self.client.post(
+            f'/transactions/{first}/delete',
+            headers={'Referer': 'http://localhost/transactions?q=market&page=1'})
+        self.assertTrue(response.headers['Location'].endswith('/transactions?q=market&page=1'))
+        second = self._ids()['Bus to town']
+        evil = self.client.post(f'/transactions/{second}/delete',
+                                headers={'Referer': 'https://evil.example/phish'})
+        self.assertNotIn('evil', evil.headers.get('Location', ''))
+
+    def test_sign_in_page_clears_the_saved_chat(self):
+        self.client.post('/logout')
+        self.assertIn(b"sessionStorage.removeItem('expense-tracker-chat')",
+                      self.client.get('/login').data)
+
+    def test_dashboard_has_an_add_cash_shortcut(self):
+        self.assertIn(b'#add-transaction', self.client.get('/').data)
 
 
 class FiveImprovementsTests(RouteTestCase):

@@ -28,4 +28,10 @@
         You are signed out automatically after {{ session_timeout }} minutes of inactivity.
     </p>
 </div>
+<script>
+    // The dashboard keeps the assistant conversation for this tab. Clear it on
+    // the sign-in screen too, so after an automatic sign-out the next person
+    // to use this device cannot scroll back through it.
+    try { sessionStorage.removeItem('expense-tracker-chat'); } catch (e) {}
+</script>
 {% endblock %}

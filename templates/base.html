@@ -45,7 +45,7 @@
         <a href="{{ url_for('reports') }}" {% if request.endpoint == 'reports' %}class="active"{% endif %}>Reports</a>
         {% if demo_features %}<a href="{{ url_for('household') }}" {% if request.endpoint == 'household' %}class="active"{% endif %}>Household</a>{% endif %}
         <a href="{{ url_for('settings') }}" {% if request.endpoint == 'settings' %}class="active"{% endif %}>Settings</a>
-        <form method="POST" action="{{ url_for('logout') }}" class="nav-form">
+        <form method="POST" action="{{ url_for('logout') }}" class="nav-form" onsubmit="try{sessionStorage.removeItem('expense-tracker-chat');}catch(e){}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <button type="submit" class="nav-link-button">Sign out</button>
         </form>
