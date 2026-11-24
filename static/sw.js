@@ -13,7 +13,7 @@
  */
 'use strict';
 
-var CACHE_NAME = 'expense-tracker-shell-v6';
+var CACHE_NAME = 'expense-tracker-shell-v8';
 var OFFLINE_URL = '/offline';
 
 var PRECACHE_ASSETS = [
@@ -29,6 +29,37 @@ var PRECACHE_ASSETS = [
     '/static/icons/icon-maskable-192.png',
     '/static/icons/icon-maskable-512.png'
 ];
+
+// How long a page may take before the offline screen is shown instead. When
+// the phone cannot reach the PC at all (the PC asleep, or the phone on mobile
+// data), iOS Safari can leave the request open for a minute or more, and the
+// installed app shows only its dark background: the "black screen" seen on
+// the iPhone 13 and 14 Pro Max (D15). Pages normally load in under a second
+// (NFR-01: at most 3 s), so 6 s only ever cuts off a server that is not there.
+var NAVIGATION_TIMEOUT_MS = 6000;
+
+function fetchWithTimeout(request, ms) {
+    // Known offline: answer at once instead of waiting for the timeout.
+    if (self.navigator && self.navigator.onLine === false) {
+        return Promise.reject(new Error('offline'));
+    }
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer;
+    var timeout = new Promise(function (resolve, reject) {
+        timer = setTimeout(function () {
+            if (controller) controller.abort();
+            reject(new Error('timeout'));
+        }, ms);
+    });
+    var network = fetch(request, controller ? { signal: controller.signal } : undefined);
+    return Promise.race([network, timeout]).then(function (response) {
+        clearTimeout(timer);
+        return response;
+    }, function (error) {
+        clearTimeout(timer);
+        throw error;
+    });
+}
 
 self.addEventListener('install', function (event) {
     event.waitUntil(
@@ -93,7 +124,7 @@ self.addEventListener('fetch', function (event) {
     var accept = request.headers.get('accept') || '';
     if (request.mode === 'navigate' || accept.indexOf('text/html') !== -1) {
         event.respondWith(
-            fetch(request).catch(function () {
+            fetchWithTimeout(request, NAVIGATION_TIMEOUT_MS).catch(function () {
                 return caches.match(OFFLINE_URL).then(function (cached) {
                     // Last resort if the offline page was never cached, so a
                     // navigation never resolves to an empty/failed response.

@@ -274,8 +274,8 @@
 
     /* "Show password" checkbox: toggles every password input in the same form
      * between type="password" and type="text" so the user can verify what they
-     * typed before submitting. */
-    document.addEventListener('DOMContentLoaded', function () {
+     * typed before submitting. Runs immediately if the DOM is already ready. */
+    function initPasswordToggles() {
         document.querySelectorAll('input[type="password"]').forEach(function (input) {
             input.setAttribute('data-password-field', '');
         });
@@ -296,11 +296,25 @@
             }
         });
         // Coming back with the Back button restores the page from cache; never
-        // leave a password showing there.
+        // leave a password showing or a CSV upload spinner stuck there.
         window.addEventListener('pageshow', function () {
             boxes.forEach(function (box) { setVisible(box, false); });
+            var btn = document.getElementById('csv-upload-btn');
+            var prompt = document.getElementById('csv-upload-loading');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = 'Upload and categorise';
+            }
+            if (prompt) {
+                prompt.hidden = true;
+            }
         });
-    });
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initPasswordToggles);
+    } else {
+        initPasswordToggles();
+    }
 
     /* Settings → "Share backup…": on phones, hand the backup .zip to the share
      * sheet (Drive, iCloud Files, WhatsApp, email…) instead of leaving it in
@@ -357,6 +371,18 @@
                 status.textContent = 'The backup could not be prepared. Use ' +
                     '"Download a backup" instead.';
             }).then(function () { button.disabled = false; });
+        });
+    });
+    /* iPhone/iPad file pickers grey out files whose type iOS does not map to
+     * the accept= filter, so a statement saved from WhatsApp or Mail could not
+     * be chosen in Safari. On iOS the filter is dropped; the server still
+     * rejects anything that is not a .csv. */
+    document.addEventListener('DOMContentLoaded', function () {
+        var ios = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        if (!ios) return;
+        document.querySelectorAll('input[type="file"][data-ios-any-file]').forEach(function (input) {
+            input.removeAttribute('accept');
         });
     });
 })();

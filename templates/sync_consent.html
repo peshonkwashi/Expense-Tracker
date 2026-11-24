@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block title %}Connect {{ provider }}{% endblock %}
+{% block content %}
+<div class="card consent-card">
+    <p class="consent-provider">{{ provider }}</p>
+    <h1>Allow read-only access</h1>
+    <p class="lede">The Expense Tracker is asking {{ provider }} for permission
+    to read your account so your transactions arrive without a CSV upload.</p>
+
+    <h2>It will be able to</h2>
+    <ul class="consent-list allow">
+        <li>See your account name and the last 4 digits of the account number</li>
+        <li>Read your balance</li>
+        <li>Read your transactions from the last 90 days, and new ones as they happen</li>
+    </ul>
+
+    <h2>It will never be able to</h2>
+    <ul class="consent-list deny">
+        <li>Move money, make payments or change anything on your account</li>
+        <li>See your PIN, card number or online-banking password</li>
+    </ul>
+
+    <p class="muted">Access lasts {{ days }} days, after which you are asked
+    again. You can disconnect at any time from the Transactions page.</p>
+
+    <div class="notice">
+        <strong>Simulated connection.</strong>
+        <p style="margin:.4rem 0 0;">Zambian banks do not yet offer an open
+        banking service to apps like this one, so this demo simulates the
+        connection: no bank is contacted, nothing leaves this device, and the
+        transactions imported are realistic examples.</p>
+    </div>
+
+    <form method="POST" action="{{ url_for('connect_bank') }}"
+          onsubmit="var b=this.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Connecting & syncing…';}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <input type="hidden" name="bank" value="{{ provider_key }}"/>
+        <label class="consent-check">
+            <input type="checkbox" name="consent" value="1" required>
+            I allow read-only access to my {{ provider }} account for {{ days }} days.
+        </label>
+        <div class="form-actions">
+            <button type="submit">Allow and connect</button>
+            <a class="button secondary" href="{{ url_for('transactions') }}">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

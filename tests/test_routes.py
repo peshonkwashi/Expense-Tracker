@@ -400,9 +400,10 @@ class AuthenticationTests(RouteTestCase):
         self.assertIn(b'same as the current one', response.data)
 
     def test_password_forms_include_show_password_checkbox(self):
-        # Fresh install: /setup has the checkbox.
+        # Fresh install: /setup has the checkbox with an inline toggle fallback.
         setup_html = self.client.get('/setup').data
         self.assertIn(b'data-toggle-passwords', setup_html)
+        self.assertIn(b'onchange=', setup_html)
         self.assertIn(b'Show password', setup_html)
 
         self.complete_setup()
@@ -728,8 +729,15 @@ class FullFlowTests(RouteTestCase):
     def test_retrain_runs_and_reports_metrics(self):
         response = self.client.post('/settings/retrain', follow_redirects=True)
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Retrained', response.data)
-        self.assertIn(b'Forecast hold-out', response.data)
+        self.assertIn(b'Insights updated', response.data)
+        self.assertIn(b'Spending predictions checked', response.data)
+        # Plain language only: the confirmation messages carry no ML jargon
+        # (the technical figures stay on the model cards, outside the flashes).
+        import re
+        flashes = re.search(rb'<ul class="flashes">(.*?)</ul>', response.data, re.S)
+        self.assertIsNotNone(flashes)
+        for jargon in (b'F1', b'hold-out', b'MAE', b'Retrained'):
+            self.assertNotIn(jargon, flashes.group(1))
 
     def test_database_export_returns_the_file(self):
         response = self.client.get('/settings/export')
@@ -766,19 +774,94 @@ class NewFeatureTests(RouteTestCase):
         conn.close()
         return n
 
+    def _connect_bank(self, bank='zanaco'):
+        return self.client.post('/sync/bank/connect', data={
+            'bank': bank, 'consent': '1'}, follow_redirects=True)
+
+    def _connect_momo(self, wallet='mtn', number='0961234567'):
+        return self.client.post('/sync/momo/connect', data={
+            'wallet': wallet, 'number': number, 'consent': '1'}, follow_redirects=True)
+
     def test_bank_sync_downloads_new_transactions(self):
         before = self._txn_count()
-        response = self.client.post('/sync-bank', follow_redirects=True)
+        response = self._connect_bank()
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Bank Sync Successful', response.data)
+        self.assertIn(b'Connected to Zanaco', response.data)
         self.assertGreater(self._txn_count(), before)
 
     def test_mobile_money_sync_imports_transactions(self):
         before = self._txn_count()
-        response = self.client.post('/sync-momo', follow_redirects=True)
+        response = self._connect_momo()
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Mobile Money Sync Successful', response.data)
+        self.assertIn(b'Connected to MTN MoMo', response.data)
         self.assertGreater(self._txn_count(), before)
+
+    def test_bank_connect_shows_a_read_only_consent_screen_first(self):
+        page = self.client.get('/sync/bank/connect?bank=fnb')
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(b'FNB Zambia', page.data)
+        self.assertIn(b'Allow read-only access', page.data)
+        self.assertIn(b'never be able to', page.data)
+        # Without ticking consent, nothing connects or imports.
+        before = self._txn_count()
+        self.client.post('/sync/bank/connect', data={'bank': 'fnb'})
+        self.assertEqual(self._txn_count(), before)
+        self.assertNotIn(b'Connected: FNB', self.client.get('/transactions').data)
+
+    def test_unknown_bank_is_rejected(self):
+        response = self.client.get('/sync/bank/connect?bank=evilbank',
+                                   follow_redirects=True)
+        self.assertIn(b'Choose your bank', response.data)
+
+    def test_connected_bank_shows_a_badge_with_a_masked_account(self):
+        import re
+        self._connect_bank('absa')
+        page = self.client.get('/transactions').data.decode()
+        self.assertRegex(page, r'Connected: Absa \(•••• \d{4}\)')
+        self.assertIn('ABSA POS', page)  # rows worded the way that bank shows them
+        self.assertIn('Disconnect', page)
+
+    def test_sync_now_requires_a_connection(self):
+        response = self.client.post('/sync-bank', follow_redirects=True)
+        self.assertIn(b'Connect your bank account first', response.data)
+
+    def test_wallet_number_must_match_the_network(self):
+        before = self._txn_count()
+        cases = {'0971234567': b'is not a MTN MoMo number', '12345': b'Enter a Zambian',
+                 '': b'Enter a Zambian'}
+        for number, message in cases.items():
+            with self.subTest(number=number):
+                response = self._connect_momo('mtn', number)
+                self.assertIn(message, response.data)
+        self.assertEqual(self._txn_count(), before)
+        ok = self._connect_momo('airtel', '+260 977 123 456')
+        self.assertIn(b'Connected to Airtel Money', ok.data)
+        self.assertIn('Connected: Airtel Money (097 ••• 3456)',
+                      self.client.get('/transactions').data.decode())
+
+    def test_disconnect_can_remove_only_the_imported_transactions(self):
+        before = self._txn_count()
+        self._connect_bank()
+        self._connect_momo()
+        self.assertGreater(self._txn_count(), before)
+        response = self.client.post('/sync/bank/disconnect', data={
+            'remove_transactions': '1'}, follow_redirects=True)
+        self.assertIn(b'Disconnected Zanaco', response.data)
+        page = response.data.decode()
+        self.assertNotIn('Connected: Zanaco', page)
+        self.assertIn('Connected: MTN MoMo', page)  # the other link is untouched
+        self.client.post('/sync/momo/disconnect', data={
+            'provider': 'mtn', 'remove_transactions': '1'})
+        self.assertEqual(self._txn_count(), before)  # back to the pre-demo state
+
+    def test_disconnect_without_removal_keeps_the_transactions(self):
+        self._connect_bank()
+        count = self._txn_count()
+        self.client.post('/sync/bank/disconnect')
+        self.assertEqual(self._txn_count(), count)
+        # Reconnecting works straight away (the daily sync marker was reset).
+        self.assertIn(b'Connected to Zanaco', self._connect_bank().data)
+        self.assertGreater(self._txn_count(), count)
 
     def test_assistant_answers_total_spend(self):
         response = self.client.post(
@@ -864,6 +947,19 @@ class NewFeatureTests(RouteTestCase):
         self.assertFalse(any('app-pass-123' in v for v in stored))
         # The remembered address pre-fills the form.
         self.assertIn(b'value="me@example.com"', self.client.get('/settings').data)
+
+    def test_auto_fetch_shows_the_providers_reason_for_a_refused_sign_in(self):
+        import imaplib
+        from unittest import mock
+        refused = imaplib.IMAP4.error(
+            b'[ALERT] Application-specific password required')
+        with mock.patch.dict(os.environ, {'IMAP_EMAIL': '', 'IMAP_PASSWORD': ''}), \
+                mock.patch('services.imap_fetcher.connect_imap', side_effect=refused):
+            response = self.client.post('/auto-fetch-receipts', data={
+                'imap_email': 'me@gmail.com', 'imap_password': 'normal-password'},
+                follow_redirects=True)
+        self.assertIn(b'Application-specific password required', response.data)
+        self.assertNotIn(b'normal-password', response.data)
 
     def _receipt_item_count(self):
         import database
@@ -954,12 +1050,115 @@ class NewFeatureTests(RouteTestCase):
             f'/transactions/{txn_id}/receipt/items/999999/delete').status_code, 404)
 
     def test_bank_sync_is_idempotent_within_a_day(self):
-        first = self.client.post('/sync-bank', follow_redirects=True)
-        self.assertIn(b'Bank Sync Successful', first.data)
+        first = self.client.post('/sync/bank/connect', data={
+            'bank': 'zanaco', 'consent': '1'}, follow_redirects=True)
+        self.assertIn(b'Connected to Zanaco', first.data)
         count_after_first = self._txn_count()
         second = self.client.post('/sync-bank', follow_redirects=True)
         self.assertIn(b'already up to date', second.data)
         self.assertEqual(self._txn_count(), count_after_first)
+
+    def test_switching_bank_provider_clears_stale_last_sync(self):
+        self.client.post('/sync/bank/connect', data={
+            'bank': 'zanaco', 'consent': '1'}, follow_redirects=True)
+        count_after_zanaco = self._txn_count()
+        switched = self.client.post('/sync/bank/connect', data={
+            'bank': 'fnb', 'consent': '1'}, follow_redirects=True)
+        self.assertIn(b'Connected to FNB Zambia', switched.data)
+        self.assertGreater(self._txn_count(), count_after_zanaco)
+
+    def test_both_mtn_and_airtel_wallets_can_be_connected_simultaneously(self):
+        base_count = self._txn_count()
+        # Connect MTN MoMo first
+        mtn = self.client.post('/sync/momo/connect', data={
+            'wallet': 'mtn', 'number': '0961 234 567', 'consent': '1',
+        }, follow_redirects=True)
+        self.assertIn(b'Connected to MTN MoMo', mtn.data)
+        self.assertIn(b'Connect another wallet (Airtel Money)', mtn.data)
+        count_mtn = self._txn_count()
+        self.assertGreater(count_mtn, base_count)
+
+        # Connect Airtel Money while MTN MoMo stays connected
+        airtel = self.client.post('/sync/momo/connect', data={
+            'wallet': 'airtel', 'number': '0971 234 567', 'consent': '1',
+        }, follow_redirects=True)
+        self.assertIn(b'Connected to Airtel Money', airtel.data)
+        self.assertIn(b'Connected: MTN MoMo', airtel.data)
+        self.assertIn(b'Connected: Airtel Money', airtel.data)
+        self.assertIn(b'Sync all wallets (2)', airtel.data)
+        count_both = self._txn_count()
+        self.assertGreater(count_both, count_mtn)
+
+        # Disconnecting MTN MoMo with removal removes ONLY MTN rows, keeping
+        # base statement rows and Airtel Money rows intact.
+        disc = self.client.post('/sync/momo/disconnect', data={
+            'provider': 'mtn', 'remove_transactions': '1',
+        }, follow_redirects=True)
+        self.assertIn(b'Disconnected MTN MoMo', disc.data)
+        self.assertIn(b'Connected: Airtel Money', disc.data)
+        self.assertNotIn(b'Connected: MTN MoMo', disc.data)
+        airtel_added = count_both - count_mtn
+        self.assertEqual(self._txn_count(), base_count + airtel_added)
+
+    def test_connecting_an_already_connected_wallet_imports_nothing_more(self):
+        self._connect_momo('mtn', '0961234567')
+        count = self._txn_count()
+        again = self._connect_momo('mtn', '0769999999')
+        self.assertIn(b'MTN MoMo is already connected (096', again.data)
+        self.assertEqual(self._txn_count(), count)
+
+    def test_wallet_disconnect_must_name_the_wallet(self):
+        self._connect_momo('mtn')
+        response = self.client.post('/sync/momo/disconnect', follow_redirects=True)
+        self.assertIn(b'Choose which wallet to disconnect', response.data)
+        self.assertIn(b'Connected: MTN MoMo', response.data)
+
+    def test_single_wallet_record_from_before_multi_wallet_is_migrated(self):
+        # The earlier format kept one wallet under 'sync_momo_link' and tagged
+        # its rows 'sync-momo-<hex>'. It must show as connected, and a
+        # per-wallet disconnect must still remove exactly its rows.
+        import json
+        import database
+        conn = database.get_db_connection()
+        user = database.get_user(conn)
+        database.set_setting(conn, 'sync_momo_link', json.dumps({
+            'provider': 'airtel', 'name': 'Airtel Money',
+            'number_mask': '097 ••• 1234', 'connected_at': '2026-11-20T10:00'}))
+        database.set_setting(conn, 'last_momo_sync', '2026-11-20')
+        for i in range(3):
+            conn.execute(
+                "INSERT INTO Transaction_Record (transaction_date, description, amount, "
+                "transaction_type, import_hash, user_id) VALUES "
+                "('2026-11-20', 'Airtel Money Send Money', 50, 'DEBIT', ?, ?)",
+                (f'sync-momo-legacy{i}', user['user_id']))
+        conn.commit()
+        conn.close()
+        before = self._txn_count()
+
+        page = self.client.get('/transactions').data.decode()
+        self.assertIn('Connected: Airtel Money (097 ••• 1234)', page)
+        self.client.post('/sync/momo/disconnect', data={
+            'provider': 'airtel', 'remove_transactions': '1'})
+        self.assertEqual(self._txn_count(), before - 3)
+        conn = database.get_db_connection()
+        self.assertIsNone(database.get_setting(conn, 'sync_momo_link'))
+        conn.close()
+
+    def test_expired_bank_consent_prompts_reauthorisation(self):
+        import json
+        import database
+        self.client.post('/sync/bank/connect', data={
+            'bank': 'absa', 'consent': '1'}, follow_redirects=True)
+        conn = database.get_db_connection()
+        rec = json.loads(database.get_setting(conn, 'sync_bank_link'))
+        rec['consent_expires'] = '2020-01-01'
+        database.set_setting(conn, 'sync_bank_link', json.dumps(rec))
+        conn.commit()
+        conn.close()
+
+        res = self.client.post('/sync-bank', follow_redirects=False)
+        self.assertEqual(res.status_code, 302)
+        self.assertIn('/sync/bank/connect?bank=absa', res.headers['Location'])
 
     def test_sync_triggers_retrain_and_forecast_reevaluation(self):
         # The import pipeline never backtests, so a FORECASTING metric appearing
@@ -968,7 +1167,8 @@ class NewFeatureTests(RouteTestCase):
         conn = database.get_db_connection()
         self.assertIsNone(database.latest_metric(conn, 'FORECASTING'))
         conn.close()
-        self.client.post('/sync-bank', follow_redirects=True)
+        self.client.post('/sync/bank/connect', data={
+            'bank': 'stanbic', 'consent': '1'}, follow_redirects=True)
         conn = database.get_db_connection()
         self.assertIsNotNone(database.latest_metric(conn, 'FORECASTING'))
         conn.close()
@@ -1060,7 +1260,8 @@ class DemoFeatureFlagTests(RouteTestCase):
                              self.client.get('/transactions').data)
             self.assertNotIn(b'Email Receipt Auto-Fetcher',
                              self.client.get('/settings').data)
-            for path in ('/sync-bank', '/sync-momo', '/ask-assistant',
+            for path in ('/sync-bank', '/sync-momo', '/sync/bank/connect',
+                         '/sync/momo/connect', '/sync/bank/disconnect', '/ask-assistant',
                          '/auto-fetch-receipts', '/household/leave'):
                 self.assertEqual(self.client.post(path).status_code, 404, path)
             self.assertEqual(self.client.get('/household').status_code, 404)
@@ -1469,6 +1670,7 @@ class FiveImprovementsTests(RouteTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Shoprite Cairo Road', response.data)
         self.assertIn(b'245.50 ZMW) under Groceries.', response.data)
+        self.assertIn(b'id="csv-upload-loading"', response.data)
 
     def test_search_transactions_filters_by_merchant_and_export(self):
         from datetime import date

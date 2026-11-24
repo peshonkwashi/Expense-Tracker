@@ -10,34 +10,130 @@ correction.</p>
 {# Two columns in both builds: 4 cards (demo) or 2 (spec-only) fill it evenly. #}
 <div class="grid two" style="margin-bottom:1.25rem;">
     {% if demo_features %}
-    <div class="card">
+    <div class="card sync-card" id="bank-sync">
         <h2>Sync with Bank</h2>
-        <p class="muted">Connect to your bank via Open Banking (Mocked). Instantly downloads your latest transactions without manual CSV uploads.</p>
-        <form method="POST" action="{{ url_for('sync_bank') }}" onsubmit="this.querySelector('button').innerText = 'Connecting...'; setTimeout(() => { this.querySelector('button').innerText = 'Downloading...'; }, 800);">
+        {% if bank_link %}
+        <p><span class="badge ok sync-badge">Connected: {{ bank_link.name }} ({{ bank_link.account_mask }})</span></p>
+        <p class="muted">Read-only access until {{ bank_link.consent_expires_label }}.
+        {% if bank_link.last_sync %}Last synced {{ bank_link.last_sync_label }}.{% endif %}</p>
+        <form method="POST" action="{{ url_for('sync_bank') }}"
+              onsubmit="var b=this.querySelector('button'); b.disabled=true; b.textContent='Syncing…';">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-            <button type="submit" class="primary" style="width: 100%; margin-top: 1rem;">Sync Accounts</button>
+            <button type="submit" class="primary sync-action">Sync now</button>
         </form>
+        <form method="POST" action="{{ url_for('disconnect_sync', kind='bank') }}" class="sync-disconnect">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <label><input type="checkbox" name="remove_transactions" value="1">
+                Also remove the transactions it imported</label>
+            <button type="submit" class="secondary small">Disconnect</button>
+        </form>
+        {% else %}
+        <p class="muted">Pick your bank and allow read-only access, and your
+        latest transactions arrive without a CSV upload. <em>Simulated: no bank
+        is contacted.</em></p>
+        <form method="GET" action="{{ url_for('connect_bank') }}">
+            <div class="field">
+                <label for="sync-bank-choice">Your bank</label>
+                <select id="sync-bank-choice" name="bank" required>
+                    <option value="" disabled selected>Choose a bank…</option>
+                    {% for key, bank in banks.items() %}
+                    <option value="{{ key }}">{{ bank.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="primary sync-action">Continue</button>
+        </form>
+        {% endif %}
     </div>
 
-    <div class="card">
+    {# One connect form, used for the first wallet and for "connect another". #}
+    {% macro wallet_connect_form(options, field_id) %}
+    <form method="POST" action="{{ url_for('connect_momo') }}" class="wallet-connect"
+          onsubmit="var b=this.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Connecting & syncing…';}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <fieldset class="wallet-choice">
+            <legend>Wallet</legend>
+            {% for key, wallet in options.items() %}
+            <label><input type="radio" name="wallet" value="{{ key }}" required
+                          data-prefix="{{ wallet.prefixes[0] }}"
+                          {% if loop.first %}checked{% endif %}
+                          onchange="this.form.elements.number.placeholder=this.dataset.prefix+' 123 4567';"> {{ wallet.name }}</label>
+            {% endfor %}
+        </fieldset>
+        <div class="field">
+            <label for="{{ field_id }}">Mobile number</label>
+            <input type="tel" id="{{ field_id }}" name="number" required inputmode="tel"
+                   autocomplete="off" placeholder="{{ (options.values()|first).prefixes[0] }} 123 4567">
+            <p class="hint">{% for wallet in options.values() %}{{ wallet.name }} numbers start
+                {{ wallet.prefixes|join(' or ') }}{{ '; ' if not loop.last else '.' }}{% endfor %}
+                Any demo number in that format works.</p>
+        </div>
+        <label class="consent-check"><input type="checkbox" name="consent" value="1" required>
+            I allow read-only access to this wallet's transactions.</label>
+        <button type="submit" class="primary sync-action">Connect wallet</button>
+    </form>
+    {% endmacro %}
+
+    <div class="card sync-card" id="momo-sync">
         <h2>Sync Mobile Money</h2>
-        <p class="muted">Link your MTN MoMo or Airtel Money wallet (Mocked). Pulls airtime, bill payments, MoMo-Pay purchases and transfers automatically.</p>
-        <form method="POST" action="{{ url_for('sync_momo') }}" onsubmit="this.querySelector('button').innerText = 'Connecting...'; setTimeout(() => { this.querySelector('button').innerText = 'Importing...'; }, 800);">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-            <button type="submit" class="primary" style="width: 100%; margin-top: 1rem;">Sync Wallet</button>
-        </form>
+        {% if momo_links %}
+            {% for wallet in momo_links %}
+            <div class="wallet-item">
+                <p class="wallet-head"><span class="badge ok sync-badge">Connected: {{ wallet.name }} ({{ wallet.number_mask }})</span></p>
+                <p class="muted">{% if wallet.last_sync %}Last synced {{ wallet.last_sync_label }}.{% endif %}
+                Airtime, bills, merchant payments and transfers arrive in ZMW.</p>
+                <form method="POST" action="{{ url_for('sync_momo') }}"
+                      onsubmit="var b=this.querySelector('button'); b.disabled=true; b.textContent='Syncing…';">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <input type="hidden" name="provider" value="{{ wallet.provider }}"/>
+                    <button type="submit" class="{{ 'primary' if momo_links|length == 1 else 'secondary' }} sync-action">Sync {{ wallet.name }}</button>
+                </form>
+                <form method="POST" action="{{ url_for('disconnect_sync', kind='momo') }}" class="sync-disconnect">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <input type="hidden" name="provider" value="{{ wallet.provider }}"/>
+                    <label><input type="checkbox" name="remove_transactions" value="1">
+                        Also remove its transactions</label>
+                    <button type="submit" class="secondary small">Disconnect</button>
+                </form>
+            </div>
+            {% endfor %}
+
+            {% if momo_links|length > 1 %}
+            <form method="POST" action="{{ url_for('sync_momo') }}" class="sync-all"
+                  onsubmit="var b=this.querySelector('button'); b.disabled=true; b.textContent='Syncing all wallets…';">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                <button type="submit" class="primary sync-action">Sync all wallets ({{ momo_links|length }})</button>
+            </form>
+            {% endif %}
+
+            {% if unlinked_wallets %}
+            <details class="wallet-add">
+                <summary>+ Connect another wallet ({{ unlinked_wallets.values()|map(attribute='name')|join(', ') }})</summary>
+                {{ wallet_connect_form(unlinked_wallets, 'sync-momo-number-extra') }}
+            </details>
+            {% endif %}
+        {% else %}
+        <p class="muted">Link MTN MoMo, Airtel Money, or both to pull in airtime,
+        bills, MoMo Pay and transfers. <em>Simulated: no network operator is contacted.</em></p>
+        {{ wallet_connect_form(wallets, 'sync-momo-number') }}
+        {% endif %}
     </div>
     {% endif %}
 
     <div class="card">
         <h2>Manual CSV Upload</h2>
-        <form method="POST" enctype="multipart/form-data">
+        <form id="csv-upload-form" method="POST" enctype="multipart/form-data"
+              onsubmit="var b=document.getElementById('csv-upload-btn'), p=document.getElementById('csv-upload-loading'); if(b){b.disabled=true; b.textContent='Uploading & categorising…';} if(p){p.hidden=false;}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <div style="margin-bottom: 0.5rem;">
-                <input type="file" name="file" accept=".csv,text/csv" required style="width: 100%;">
+                <input type="file" name="file" accept=".csv,text/csv" data-ios-any-file required style="width: 100%;" aria-label="Bank statement (.csv)">
             </div>
             <p class="hint" style="margin-bottom: 1rem;">CSV only, up to 5MB. Duplicates are skipped safely.</p>
-            <button type="submit" style="width: 100%;">Upload and categorise</button>
+            <button type="submit" id="csv-upload-btn" style="width: 100%;">Upload and categorise</button>
+            <div id="csv-upload-loading" class="upload-loading" role="status" aria-live="polite" hidden>
+                <span class="spinner" aria-hidden="true"></span>
+                <span>Uploading and categorising your statement… This can take a few seconds.</span>
+            </div>
         </form>
     </div>
 
@@ -117,8 +213,10 @@ correction.</p>
 </div>
 {% endif %}
 
-<div class="card">
-    <form method="GET" class="split no-print" style="margin-bottom:1rem;">
+{# id + the #txn-list fragment on the filter/pagination URLs: after filtering
+   the browser lands back on the list instead of the top of the page. #}
+<div class="card anchor-target" id="txn-list">
+    <form method="GET" action="{{ url_for('transactions') }}#txn-list" class="split no-print" style="margin-bottom:1rem;">
         <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;">
             <div>
                 <label for="q">Search merchant</label>
@@ -148,7 +246,7 @@ correction.</p>
             </div>
             <button type="submit" class="secondary small">Filter</button>
             {% if selected_category or selected_month or search_query %}
-            <a class="button secondary small" href="{{ url_for('transactions') }}">Clear</a>
+            <a class="button secondary small" href="{{ url_for('transactions') }}#txn-list">Clear</a>
             {% endif %}
             <a class="button secondary small" href="{{ url_for('export_transactions', category=selected_category, month=selected_month, q=search_query) }}">Export CSV</a>
         </div>
@@ -281,7 +379,7 @@ correction.</p>
         {% if total_pages > 1 %}
         <div style="display: flex; justify-content: center; gap: 10px; margin-top: 1rem;" class="no-print">
             {% if page > 1 %}
-            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, q=search_query, page=page-1) }}" class="button small secondary">&laquo; Previous</a>
+            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, q=search_query, page=page-1) }}#txn-list" class="button small secondary">&laquo; Previous</a>
             {% else %}
             <button class="small secondary" disabled>&laquo; Previous</button>
             {% endif %}
@@ -289,7 +387,7 @@ correction.</p>
             <span style="display: flex; align-items: center;">Page {{ page }} of {{ total_pages }}</span>
             
             {% if page < total_pages %}
-            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, q=search_query, page=page+1) }}" class="button small secondary">Next &raquo;</a>
+            <a href="{{ url_for('transactions', category=selected_category, month=selected_month, q=search_query, page=page+1) }}#txn-list" class="button small secondary">Next &raquo;</a>
             {% else %}
             <button class="small secondary" disabled>Next &raquo;</button>
             {% endif %}

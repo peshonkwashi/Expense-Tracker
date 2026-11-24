@@ -246,7 +246,7 @@ table.kv td.num { white-space: normal; overflow-wrap: break-word; }
 
 /* --- Forms -------------------------------------------------------------- */
 label { display: block; font-weight: 600; font-size: .87rem; margin-bottom: .25rem; }
-input[type=text], input[type=number], input[type=date], input[type=password], input[type=email], input[type=file], select {
+input[type=text], input[type=number], input[type=date], input[type=password], input[type=email], input[type=tel], input[type=file], select {
     width: 100%;
     padding: .55rem .65rem;
     border: 1px solid var(--line);
@@ -278,6 +278,10 @@ button:hover, .button:hover { filter: brightness(1.12); }
 button.secondary, .button.secondary { background: var(--surface); color: var(--ink); border-color: var(--line); }
 button.danger, .button.danger { background: var(--danger); }
 button.small, .button.small, select.small { padding: .28rem .55rem; font-size: .82rem; }
+
+/* Filter anchors (#txn-list, #report-month): leave a little breathing room
+   above the card when the browser jumps to it after a filter is applied. */
+.anchor-target { scroll-margin-top: .75rem; }
 
 .inline-form { display: inline-flex; gap: .35rem; align-items: center; margin: 0; }
 
@@ -483,7 +487,7 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
 
 @media (max-width: 768px) {
     /* Prevent iOS Safari auto-zoom on form focus and give comfortable touch targets */
-    input[type=text], input[type=number], input[type=date], input[type=password], input[type=email], select {
+    input[type=text], input[type=number], input[type=date], input[type=password], input[type=email], input[type=tel], select {
         font-size: 16px;
         min-height: 44px;
     }
@@ -575,3 +579,62 @@ details.explain p { font-size: .84rem; color: var(--ink-soft); margin: .35rem 0 
 .chat-suggestions .chip:hover, .chat-suggestions .chip:focus-visible { border-color: var(--brand); }
 #chat-history ul { margin: .4rem 0 0; padding-left: 1.1rem; }
 @media (max-width: 768px) { .chat-suggestions .chip { min-height: 2.5rem; } }
+
+/* --- CSV upload loading prompt ------------------------------------------ */
+.upload-loading {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    margin-top: .75rem;
+    padding: .65rem .8rem;
+    border-radius: 7px;
+    background: var(--brand-soft);
+    border: 1px solid var(--brand-border);
+    color: var(--ink);
+    font-size: .86rem;
+    font-weight: 500;
+}
+.upload-loading[hidden] { display: none !important; }
+.spinner {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    border: 2px solid var(--brand-border);
+    border-top-color: var(--brand);
+    border-radius: 50%;
+    animation: et-spin .75s linear infinite;
+}
+@keyframes et-spin {
+    to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
+}
+
+/* --- Simulated bank / mobile-money connections --------------------------- */
+.sync-card .sync-badge { font-size: .85rem; white-space: normal; }
+.sync-card .sync-action { width: 100%; margin-top: .5rem; }
+.sync-disconnect { display: flex; flex-wrap: wrap; align-items: center;
+                   justify-content: space-between; gap: .5rem; margin-top: .9rem;
+                   font-size: .85rem; color: var(--ink-soft); }
+.sync-disconnect label, .consent-check { display: inline-flex; align-items: center; gap: .45rem; }
+.sync-disconnect input[type=checkbox], .consent-check input[type=checkbox],
+.wallet-choice input[type=radio] { width: auto; min-height: 0; margin: 0; accent-color: var(--brand); }
+.wallet-choice { border: none; padding: 0; margin: 0 0 .9rem; display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.wallet-choice legend { font-weight: 600; margin-bottom: .35rem; padding: 0; }
+.wallet-choice label { display: inline-flex; align-items: center; gap: .4rem; font-weight: 500; }
+.consent-check { margin: .25rem 0 .9rem; font-weight: 500; }
+.consent-card { max-width: 640px; margin: 0 auto; }
+.consent-provider { font-weight: 700; color: var(--brand); margin: 0 0 .25rem; }
+.consent-list { padding-left: 1.2rem; margin: .4rem 0 1rem; }
+.consent-list li { margin: .25rem 0; }
+.consent-list.allow li::marker { content: '✓  '; color: var(--ok); }
+.consent-list.deny li::marker { content: '✕  '; color: var(--danger); }
+
+.wallet-item + .wallet-item { margin-top: .95rem; padding-top: .95rem; border-top: 1px dashed var(--line); }
+.wallet-item .wallet-head { margin: 0 0 .3rem; }
+.wallet-item .muted { margin: 0 0 .5rem; }
+.sync-all { margin-top: 1rem; }
+.wallet-add { margin-top: .95rem; padding-top: .75rem; border-top: 1px dashed var(--line); }
+.wallet-add summary { cursor: pointer; font-weight: 600; color: var(--brand); font-size: .9rem; }
+.wallet-add .wallet-connect { margin-top: .65rem; }

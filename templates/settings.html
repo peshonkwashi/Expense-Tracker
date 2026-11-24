@@ -80,13 +80,15 @@
 </div>
 
 <div class="card">
-    <h2>Retrain and re-evaluate</h2>
-    <p class="muted">Retrains the categoriser on everything labelled so far
-    (including your corrections), re-applies it to anything still uncategorised,
-    re-runs the forecast hold-out test and refreshes subscription detection.</p>
+    <h2>Refresh the app's learning</h2>
+    <p class="muted">The app learns from your transactions and every category
+    you correct. Refreshing makes it re-learn from all of them, sort any
+    transactions still marked "Uncategorised", update next month's spending
+    predictions and re-check for subscriptions. This happens automatically after
+    each upload or correction, so you only need it if something looks out of date.</p>
     <form method="POST" action="{{ url_for('retrain') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-        <button type="submit">Retrain models now</button>
+        <button type="submit">Update my insights</button>
     </form>
 </div>
 
@@ -284,7 +286,7 @@
             </div>
         </div>
         <label class="show-password">
-            <input type="checkbox" data-toggle-passwords>
+            <input type="checkbox" data-toggle-passwords onchange="(this.form||document).querySelectorAll('input[data-password-field]').forEach(function(f){f.type=this.checked?'text':'password';},this)">
             Show passwords
         </label>
         <div class="form-actions">

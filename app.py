@@ -381,147 +381,187 @@ def export_transactions():
     finally:
         conn.close()
 
-# --- Bank Sync Mock ----------------------------------------------------------
+# --- Simulated bank and mobile-money connections (demo features) ------------
+# Agreed with the supervisor: Zambia has no open-banking API a project can
+# join, so connecting and syncing are simulated (services/simulated_sync.py).
+# The user still picks a real provider and grants read-only consent, so the
+# flow is the one a live integration would have.
+
+def _sync_context(conn):
+    """Template data for the two sync cards (empty when demo features are off)."""
+    if not config.DEMO_FEATURES:
+        return {}
+    from services import simulated_sync
+    momo_links = simulated_sync.wallet_connections(conn)
+    linked_providers = {w['provider'] for w in momo_links}
+    unlinked_wallets = {k: v for k, v in simulated_sync.WALLETS.items()
+                        if k not in linked_providers}
+    return {'bank_link': simulated_sync.connection(conn, 'bank'),
+            'momo_links': momo_links,
+            'unlinked_wallets': unlinked_wallets,
+            'banks': simulated_sync.BANKS, 'wallets': simulated_sync.WALLETS}
+
+
+def _after_sync(conn, user, added, source):
+    """Retrain on new data exactly as an upload does, then report."""
+    _retrain_and_evaluate(conn, user['user_id'])
+    flash(f"{source}: imported {added} new transaction"
+          f"{'s' if added != 1 else ''} and refreshed your categories, budget "
+          "and forecasts.", 'success')
+
+
+@app.route('/sync/bank/connect', methods=('GET', 'POST'))
+@security.login_required
+def connect_bank():
+    """Pick a bank, review the read-only consent screen, then connect."""
+    from services import simulated_sync
+    _demo_only()
+    bank_key = request.values.get('bank', '')
+    if bank_key not in simulated_sync.BANKS:
+        flash('Choose your bank to connect.', 'error')
+        return redirect(url_for('transactions'))
+    bank = simulated_sync.BANKS[bank_key]
+    if request.method == 'GET':
+        return render_template('sync_consent.html', kind='bank', provider_key=bank_key,
+                               provider=bank['name'], days=simulated_sync.CONSENT_DAYS)
+    if not request.form.get('consent'):
+        flash('Tick the box to allow read-only access, or cancel.', 'error')
+        return redirect(url_for('connect_bank', bank=bank_key))
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        simulated_sync.connect_bank(conn, bank_key)
+        added = simulated_sync.sync(conn, 'bank', user['user_id'], first=True)
+        conn.commit()
+        _after_sync(conn, user, added or 0, f"Connected to {bank['name']}")
+    finally:
+        conn.close()
+    return redirect(url_for('transactions'))
+
+
+@app.route('/sync/momo/connect', methods=('POST',))
+@security.login_required
+def connect_momo():
+    """Link an MTN MoMo or Airtel Money wallet by its Zambian number."""
+    from services import simulated_sync
+    _demo_only()
+    wallet_key = request.form.get('wallet', '')
+    if wallet_key not in simulated_sync.WALLETS:
+        flash('Choose MTN MoMo or Airtel Money.', 'error')
+        return redirect(url_for('transactions'))
+    error = simulated_sync.wallet_number_error(wallet_key, request.form.get('number'))
+    if error:
+        flash(error, 'error')
+        return redirect(url_for('transactions'))
+    if not request.form.get('consent'):
+        flash('Tick the box to allow read-only access to the wallet.', 'error')
+        return redirect(url_for('transactions'))
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        existing = simulated_sync.connection(conn, 'momo', provider=wallet_key)
+        if existing:
+            # Reconnecting would import a second batch on top of the first.
+            flash(f"{existing['name']} is already connected ({existing['number_mask']}). "
+                  "Disconnect it first to link a different number.", 'info')
+            return redirect(url_for('transactions'))
+        simulated_sync.connect_wallet(conn, wallet_key, request.form.get('number'))
+        added = simulated_sync.sync(conn, 'momo', user['user_id'],
+                                    first=True, provider=wallet_key)
+        conn.commit()
+        name = simulated_sync.WALLETS[wallet_key]['name']
+        _after_sync(conn, user, added or 0, f'Connected to {name}')
+    finally:
+        conn.close()
+    return redirect(url_for('transactions'))
+
+
+def _sync_connected(kind, label):
+    from services import simulated_sync
+    _demo_only()
+    provider = (request.form.get('provider') or '').strip() or None
+    conn = get_db_connection()
+    try:
+        user = database.get_user(conn)
+        if kind == 'momo' and provider is None:
+            wallets = simulated_sync.wallet_connections(conn)
+            if not wallets:
+                flash(f'Connect your {label} first.', 'error')
+                return redirect(url_for('transactions'))
+            names = ' & '.join(w['name'] for w in wallets)
+            added = simulated_sync.sync(conn, 'momo', user['user_id'])
+            if added is None:
+                flash(f"{names} {'are' if len(wallets) > 1 else 'is'} already up to date: "
+                      "no new transactions since your last sync today.", 'info')
+                return redirect(url_for('transactions'))
+            conn.commit()
+            _after_sync(conn, user, added, f"{names} sync")
+            return redirect(url_for('transactions'))
+
+        record = simulated_sync.connection(conn, kind, provider=provider)
+        if record is None:
+            flash(f'Connect your {label} first.', 'error')
+            return redirect(url_for('transactions'))
+        added = simulated_sync.sync(conn, kind, user['user_id'], provider=provider)
+        if added == 'expired':
+            flash(f"Your {simulated_sync.CONSENT_DAYS}-day read-only access to "
+                  f"{record['name']} has expired. Please allow access again.", 'warning')
+            return redirect(url_for('connect_bank', bank=record['provider']))
+        if added is None:
+            # Like a real sync of the same window: nothing new since today's.
+            flash(f"{record['name']} is already up to date: no new transactions "
+                  "since your last sync today.", 'info')
+            return redirect(url_for('transactions'))
+        conn.commit()
+        _after_sync(conn, user, added, f"{record['name']} sync")
+    finally:
+        conn.close()
+    return redirect(url_for('transactions'))
+
 
 @app.route('/sync-bank', methods=['POST'])
 @security.login_required
 def sync_bank():
-    _demo_only()
-    import random
-    from datetime import date, timedelta
-    
-    conn = database.get_db_connection()
-    try:
-        user = database.get_user(conn)
-        today = date.today()
+    return _sync_connected('bank', 'bank account')
 
-        # Real bank sync is idempotent: re-fetching the same window finds nothing
-        # new. Mirror that so repeated clicks don't pile up duplicate synthetic
-        # rows and inflate every chart.
-        if database.get_setting(conn, 'last_bank_sync') == today.isoformat():
-            flash("Your bank account is already up to date — no new transactions "
-                  "since your last sync today.", "info")
-            return redirect(url_for('transactions'))
-
-        # Realistic everyday merchants for a Zambian account (ZMW), each mapped
-        # to its true category so a synced row is indistinguishable from one read
-        # off an uploaded statement. All debits: a salary is monthly, not
-        # something a few-day sync pulls, and injecting a fake one every sync
-        # would distort the salary-cycle analysis and the savings pool.
-        merchants = [
-            ("Shoprite",      'Groceries',       80, 850),
-            ("Pick n Pay",    'Groceries',       60, 700),
-            ("Hungry Lion",   'Dining Out',      40, 220),
-            ("Ubuntu Cab",    'Transport',       25, 160),
-            ("Netflix",       'Subscriptions',  159, 159),
-            ("MTN Airtime",   'Airtime & Data',  20, 200),
-            ("Link Pharmacy", 'Healthcare',      30, 400),
-            ("Game Stores",   'Shopping',       100, 900),
-        ]
-        category_ids = {name: database.category_id_for(conn, cat)
-                        for name, cat, _, _ in merchants}
-
-        # 5-10 synthetic new transactions dated over the last few days.
-        num_txns = random.randint(5, 10)
-        added = 0
-        for _ in range(num_txns):
-            name, _cat, low, high = random.choice(merchants)
-            days_ago = random.randint(0, 3)
-            txn_date = (today - timedelta(days=days_ago)).strftime('%Y-%m-%d')
-            amt = round(random.uniform(low, high), 2)
-            conn.execute(
-                "INSERT INTO Transaction_Record (transaction_date, description, "
-                "amount, transaction_type, category_id, category_source, user_id) "
-                "VALUES (?, ?, ?, 'DEBIT', ?, 'rule', ?)",
-                (txn_date, name, amt, category_ids[name], user['user_id'])
-            )
-            added += 1
-
-        database.set_setting(conn, 'last_bank_sync', today.isoformat())
-        conn.commit()
-
-        # New data has arrived, so retrain and re-evaluate exactly as an upload or
-        # a correction does — otherwise the models would silently ignore synced
-        # rows while the other two ingestion paths learn from theirs.
-        _retrain_and_evaluate(conn, user['user_id'])
-
-        flash(f"Bank Sync Successful! Downloaded {added} new transactions and "
-              f"refreshed your categories, budget and forecasts.", "success")
-        return redirect(url_for('transactions'))
-    finally:
-        conn.close()
-
-
-# --- Mobile Money Sync Mock --------------------------------------------------
 
 @app.route('/sync-momo', methods=['POST'])
 @security.login_required
 def sync_momo():
-    _demo_only()
-    import random
-    from datetime import date, timedelta
+    return _sync_connected('momo', 'mobile money wallet')
 
-    conn = database.get_db_connection()
+
+@app.route('/sync/<kind>/disconnect', methods=('POST',))
+@security.login_required
+def disconnect_sync(kind):
+    """Forget a connection, optionally removing what it imported (demo reset)."""
+    from services import simulated_sync
+    _demo_only()
+    if kind not in ('bank', 'momo'):
+        abort(404)
+    provider = (request.form.get('provider') or '').strip() or None
+    if kind == 'momo' and provider not in simulated_sync.WALLETS:
+        flash('Choose which wallet to disconnect.', 'error')
+        return redirect(url_for('transactions'))
+    conn = get_db_connection()
     try:
         user = database.get_user(conn)
-        today = date.today()
-
-        # Idempotent like a real wallet sync — a second pull the same day finds
-        # nothing new rather than duplicating synthetic transactions.
-        if database.get_setting(conn, 'last_momo_sync') == today.isoformat():
-            flash("Your mobile money wallet is already up to date — no new "
-                  "transactions since your last sync today.", "info")
+        record = simulated_sync.connection(conn, kind, provider=provider)
+        if record is None:
             return redirect(url_for('transactions'))
-
-        # Typical Zambian mobile-money outflows (MTN MoMo / Airtel Money), each
-        # mapped to its real category. Debit-only, on the same reasoning as the
-        # bank sync: money *received* over mobile money is not salary, and
-        # counting inbound transfers as income would distort the salary-cycle and
-        # savings figures. Mobile money's signature costs — airtime, bill
-        # payments, merchant MoMo-Pay, sending money and agent cash-out — are all
-        # outflows anyway, which is what the budget cares about.
-        merchants = [
-            ("MTN MoMo Airtime",         'Airtime & Data',  10,  100),
-            ("Airtel Money Data Bundle", 'Airtime & Data',  50,  250),
-            ("ZESCO Token via MoMo",     'Utilities',      100,  500),
-            ("DSTV Payment via MoMo",    'Subscriptions',  250,  500),
-            ("MoMo Pay - Shoprite",      'Groceries',       50,  600),
-            ("MoMo Pay - Pharmacy",      'Healthcare',      30,  300),
-            ("Send Money to Family",     'Transfers',      100, 1500),
-            ("Cash Out at MoMo Agent",   'Cash Withdrawal', 200, 2000),
-            ("MoMo Withdrawal Fee",      'Transfers',        5,   40),
-        ]
-        category_ids = {name: database.category_id_for(conn, cat)
-                        for name, cat, _, _ in merchants}
-
-        # 5-10 synthetic wallet transactions dated over the last few days.
-        num_txns = random.randint(5, 10)
-        added = 0
-        for _ in range(num_txns):
-            name, _cat, low, high = random.choice(merchants)
-            days_ago = random.randint(0, 3)
-            txn_date = (today - timedelta(days=days_ago)).strftime('%Y-%m-%d')
-            amt = round(random.uniform(low, high), 2)
-            conn.execute(
-                "INSERT INTO Transaction_Record (transaction_date, description, "
-                "amount, transaction_type, category_id, category_source, user_id) "
-                "VALUES (?, ?, ?, 'DEBIT', ?, 'rule', ?)",
-                (txn_date, name, amt, category_ids[name], user['user_id'])
-            )
-            added += 1
-
-        database.set_setting(conn, 'last_momo_sync', today.isoformat())
+        removed = simulated_sync.disconnect(
+            conn, kind, user['user_id'],
+            remove_transactions=bool(request.form.get('remove_transactions')),
+            provider=provider)
         conn.commit()
-
-        # Same as the bank sync: fresh data means retrain + re-evaluate.
-        _retrain_and_evaluate(conn, user['user_id'])
-
-        flash(f"Mobile Money Sync Successful! Imported {added} recent MTN MoMo / "
-              f"Airtel Money transactions and refreshed your budget and forecasts.",
-              "success")
-        return redirect(url_for('transactions'))
+        message = f"Disconnected {record['name']}."
+        if removed:
+            _retrain_and_evaluate(conn, user['user_id'])
+            message += f' Removed the {removed} transaction(s) it imported.'
+        flash(message, 'info')
     finally:
         conn.close()
+    return redirect(url_for('transactions'))
 
 
 @app.route('/transactions', methods=('GET', 'POST'))
@@ -596,7 +636,8 @@ def transactions():
                                search_query=search_query,
                                metric=metric, target_f1=config.TARGET_F1,
                                items_by_txn=items_by_txn,
-                               page=page, total_pages=total_pages)
+                               page=page, total_pages=total_pages,
+                               **_sync_context(conn))
     finally:
         conn.close()
 
@@ -1279,6 +1320,20 @@ def leave_household():
 IMAP_EMAIL_SETTING = 'imap_email'
 
 
+def _imap_reason(error):
+    """The mail server's own reason for a failure, short and printable.
+
+    imaplib passes the server's reply through as bytes, e.g.
+    b'[AUTHENTICATIONFAILED] Invalid credentials (Failure)' or Gmail's
+    "Application-specific password required". It never contains the password.
+    """
+    detail = error.args[0] if getattr(error, 'args', None) else error
+    if isinstance(detail, bytes):
+        detail = detail.decode('utf-8', errors='replace')
+    detail = ' '.join(str(detail or type(error).__name__).split())
+    return detail[:160]
+
+
 @app.route('/auto-fetch-receipts', methods=['POST'])
 @security.login_required
 def auto_fetch_receipts():
@@ -1332,14 +1387,17 @@ def auto_fetch_receipts():
 
         try:
             mail = connect_imap(email_address, app_password)
-        except imaplib.IMAP4.error:
+        except imaplib.IMAP4.error as error:
             flash('Your mail provider refused the sign-in. Check the address, '
                   'and use an app password rather than your normal password '
-                  '(for Gmail: Google Account → Security → App passwords).', 'error')
+                  '(for Gmail: Google Account → Security → App passwords; '
+                  'school and work Google accounts may not offer them). '
+                  f'The provider said: "{_imap_reason(error)}".', 'error')
             return redirect(url_for('settings'))
-        except (OSError, socket.timeout):
-            flash('Could not reach your mail server. Check your internet '
-                  'connection and try again.', 'error')
+        except (OSError, socket.timeout) as error:
+            flash('Could not reach your mail server. Check that the computer '
+                  'running the app has internet access, then try again '
+                  f'({_imap_reason(error)}).', 'error')
             return redirect(url_for('settings'))
         finally:
             app_password = None  # used once; drop the reference
@@ -1506,24 +1564,31 @@ def retrain():
     try:
         user = database.get_user(conn)
         result, relabelled, evaluation = _retrain_and_evaluate(conn, user['user_id'])
+        # Plain-language results for a non-technical user; the technical
+        # figures (algorithm, macro F1, MAE) stay on the model cards above.
         if result['trained']:
-            f1_text = (f"{result['f1']:.3f}" if result['f1'] is not None
-                       else 'not cross-validated')
-            flash(f"Retrained {result['algorithm']} on {result['samples']} "
-                  f"labelled transactions (macro F1 {f1_text}). "
-                  f"{relabelled} transaction(s) relabelled.", 'success')
+            sorted_text = (f" {relabelled} uncategorised transaction(s) were "
+                           f"sorted into categories." if relabelled else '')
+            flash(f"Insights updated: the app re-learned from "
+                  f"{result['samples']} of your categorised transactions."
+                  f"{sorted_text}", 'success')
         else:
-            flash(f"Not retrained: {result['reason']}", 'warning')
+            flash(f"Insights not updated yet: {result['reason']}", 'warning')
 
         if evaluation['evaluated']:
-            verdict = ('within' if evaluation['meets_target'] else 'outside')
-            flash(f"Forecast hold-out on {evaluation['test_month']}: monthly-total "
-                  f"MAE {evaluation['mae']:.2f} {config.CURRENCY} "
-                  f"({evaluation['mae_ratio'] * 100:.1f}% of actual monthly spend, "
-                  f"{verdict} the {config.MAX_MAE_RATIO * 100:.0f}% target).",
-                  'info')
+            if evaluation['meets_target']:
+                flash(f"Spending predictions checked: when tested on "
+                      f"{evaluation['test_month']}, they were within "
+                      f"{evaluation['mae_ratio'] * 100:.1f}% of what you "
+                      f"actually spent.", 'info')
+            else:
+                flash(f"Spending predictions checked: they were "
+                      f"{evaluation['mae_ratio'] * 100:.1f}% off on "
+                      f"{evaluation['test_month']}, so treat them as a rough "
+                      f"guide until more months of history build up.", 'info')
         else:
-            flash(f"Forecast not evaluated: {evaluation['reason']}", 'info')
+            flash(f"Spending predictions not checked yet: "
+                  f"{evaluation['reason']}", 'info')
 
         return redirect(url_for('settings'))
     finally:

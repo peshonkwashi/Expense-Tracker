@@ -48,7 +48,7 @@
                    required minlength="8" autocomplete="new-password" data-password-field>
         </div>
         <label class="show-password">
-            <input type="checkbox" data-toggle-passwords>
+            <input type="checkbox" data-toggle-passwords onchange="(this.form||document).querySelectorAll('input[data-password-field]').forEach(function(f){f.type=this.checked?'text':'password';},this)">
             Show password
         </label>
 

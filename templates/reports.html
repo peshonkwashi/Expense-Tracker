@@ -12,7 +12,8 @@
 </div>
 
 {% if months %}
-<form method="GET" class="card no-print" style="display:flex;gap:.6rem;align-items:flex-end;">
+<form method="GET" action="{{ url_for('reports') }}#report-month" id="report-month"
+      class="card no-print anchor-target" style="display:flex;gap:.6rem;align-items:flex-end;">
     <div>
         <label for="month">Month</label>
         <select id="month" name="month" class="small">
